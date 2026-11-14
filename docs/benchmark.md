@@ -3,6 +3,7 @@
 Measured build and test performance for Loomwright 0.5.7 on the maintainer's
 machine (CachyOS, KDE Plasma, 4 jobs). Numbers are a snapshot, not a promise:
 always measure before and after a change and keep the evidence with the commit.
+If one of your changes shows no gain or causes a regression, consider trying a different approach; otherwise reject it and move on.
 
 ## The runtime benchmark
 
