@@ -39,4 +39,4 @@ Internal docs live in `docs/`; start at [`docs/README.md`](docs/README.md) and r
 
 ## Gotchas
 
-- Avoid using subagents. When they finish giving the report/summary of the task they were given, you do not know the context of places they searched, so you are better off directly reading/grepping files.
+- NEVER use subagents UNLESS the user asks you to use them (whether explicitly at the start of the task or mid-task, user message containing `@explore` or `@general` count as explicit ask).
