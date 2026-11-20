@@ -33,10 +33,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install dependencies
-        timeout-minutes: 10
+        timeout-minutes: 25
         run: |
           apt_options=(-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
-          sudo apt-get "${apt_options[@]}" update
+          # A flaky mirror can stall a large download. Bound each apt attempt,
+          # then retry: .deb files already downloaded stay in apt's cache, so
+          # later attempts resume instead of starting over.
+          apt_try() {
+            local attempt=1
+            while (( attempt <= 4 )); do
+              if sudo timeout 240 apt-get "${apt_options[@]}" "$@"; then return 0; fi
+              echo "apt attempt $attempt failed; retrying with cached downloads" >&2
+              sudo dpkg --configure -a || true
+              ((attempt++))
+            done
+            return 1
+          }
+          apt_try update
           common=(
             ninja-build ccache libx11-dev libxcb1-dev libpng-dev libgtk-3-dev libwayland-dev
             xvfb xauth xfonts-base xdotool imagemagick weston
@@ -46,8 +59,7 @@ jobs:
           else
             compiler=()
           fi
-          sudo apt-get "${apt_options[@]}" install -y --no-install-recommends \
-            "${common[@]}" "${compiler[@]}"
+          apt_try install -y --no-install-recommends "${common[@]}" "${compiler[@]}"
       - uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
