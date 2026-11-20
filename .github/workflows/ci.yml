@@ -42,7 +42,7 @@ jobs:
             xvfb xauth xfonts-base xdotool imagemagick weston
           )
           if [[ $CXX == clang++-19 ]]; then
-            compiler=(clang-19 lld)
+            compiler=(clang-19 lld llvm-19 llvm-19-tools)
           else
             compiler=()
           fi
