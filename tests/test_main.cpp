@@ -1,8 +1,10 @@
 #include "harness.hpp"
 
+#include <cstdio>
 #include <exception>
 #include <iostream>
 #include <stdexcept>
+#include <unistd.h>
 
 namespace loomwright_test {
 
@@ -11,8 +13,62 @@ std::vector<TestCase>& registry() {
     return tests;
 }
 
-void fail(const std::string& location, const std::string& message) {
-    throw std::runtime_error(location + ": " + message);
+void fail(const char* file, int line, std::string_view message) {
+    throw std::runtime_error(std::string(file) + ":" + std::to_string(line) + ": " + std::string(message));
+}
+
+void fail_equal(const char* file, int line, std::string_view message,
+                const std::string& actual, const std::string& expected) {
+    fail(file, line, std::string(message) + "\n  actual:   " + actual + "\n  expected: " + expected);
+}
+
+CapturedOutput capture_output(const std::function<int()>& fn) {
+    int out_pipe[2] = {-1, -1};
+    int err_pipe[2] = {-1, -1};
+    if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
+        throw std::runtime_error("capture_output: pipe failed");
+    }
+    const int saved_out = dup(STDOUT_FILENO);
+    const int saved_err = dup(STDERR_FILENO);
+    std::cout.flush();
+    std::cerr.flush();
+    std::fflush(nullptr);
+    dup2(out_pipe[1], STDOUT_FILENO);
+    dup2(err_pipe[1], STDERR_FILENO);
+    close(out_pipe[1]);
+    close(err_pipe[1]);
+
+    CapturedOutput result;
+    try {
+        result.code = fn();
+    } catch (...) {
+        dup2(saved_out, STDOUT_FILENO);
+        dup2(saved_err, STDERR_FILENO);
+        close(saved_out);
+        close(saved_err);
+        close(out_pipe[0]);
+        close(err_pipe[0]);
+        throw;
+    }
+    std::cout.flush();
+    std::cerr.flush();
+    std::fflush(nullptr);
+    dup2(saved_out, STDOUT_FILENO);
+    dup2(saved_err, STDERR_FILENO);
+    close(saved_out);
+    close(saved_err);
+
+    const auto drain = [](int fd) {
+        std::string text;
+        char buffer[4096];
+        ssize_t count = 0;
+        while ((count = read(fd, buffer, sizeof(buffer))) > 0) text.append(buffer, static_cast<size_t>(count));
+        close(fd);
+        return text;
+    };
+    result.out = drain(out_pipe[0]);
+    result.err = drain(err_pipe[0]);
+    return result;
 }
 
 int run_all(const std::string& filter) {

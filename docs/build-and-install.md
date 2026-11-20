@@ -92,6 +92,10 @@ allocator and libc's own checks add nothing.
 read the bitcode: GCC's driver loads its own plugin, while Clang needs `mold`
 or `lld`. When neither is available the configure step says that link-time
 optimization is disabled and the build works without it.
+For Clang, CMake probes whether the selected linker and plugin can cache
+ThinLTO backend objects. When supported the cache lives in `thinlto-cache/`
+under the build directory and is safe to delete between builds. It does not
+change the optimization level or replace ccache.
 
 ## Compiler
 

@@ -5,6 +5,7 @@
 #include <map>
 #include <unordered_map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <set>
 #include <string>
@@ -113,14 +114,14 @@ private:
     Task read_device(InputDevice* device, std::shared_ptr<PassthroughDevice> passthrough);
     Task dispatch(const Node& event, std::string key, std::string edge);
     Task safe_dispatch(const Node& event, std::string key, std::string edge);
-    Task execute_nodes(const std::vector<Node>& nodes, const EventContext& context);
+    Task execute_nodes(const std::vector<Node>& nodes, const EventContext& context, Value* function_result = nullptr);
     Task execute(const Node& node, const EventContext& context);
     /// Run a statement that cannot wait, without a coroutine.
     void execute_pure(const Node& node, const EventContext& context);
     /// Run a block of statements that cannot wait, without a coroutine.
     void execute_nodes_pure(const std::vector<Node>& nodes, const EventContext& context);
     /// The action of a statement whose expressions are already evaluated.
-    void run_action(const Node& node, const Value& first, const Value& second, const EventContext& context);
+    void run_action(const Node& node, Value& first, const Value& second, const EventContext& context);
     /// The owner token of a mouse hold.
     std::string mouse_owner(const Node& node, const EventContext& context) const;
     /// The canonical key names of a key chord.
@@ -143,6 +144,7 @@ private:
     /// Evaluate an expression that cannot wait. Such an expression needs no
     /// coroutine, so it runs without allocating a coroutine frame.
     Value eval_pure(const Expr& expr, const EventContext& context);
+    const Value& eval_operand(const Expr& expr, const EventContext& context, std::optional<Value>& storage);
     Value call_builtin(Builtin id, const std::string& name, std::vector<Value> args, const EventContext& context);
     Task call_user_function(const Function& function, std::vector<Value> args, const EventContext& context,
                             Value& out);

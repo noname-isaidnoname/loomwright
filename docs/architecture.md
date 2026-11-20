@@ -2,8 +2,8 @@
 
 Loomwright is a Linux-first desktop automation language and its native C++23
 runtime. A `.loom` file is parsed, statically checked, and then executed on a
-single epoll-based event loop. There is no interpreter in the hot path: the
-runtime is a set of coroutines (`Task`) driven by one `Scheduler`.
+single epoll-based event loop. Synchronous statements interpret the AST
+directly; coroutines (`Task`) driven by one `Scheduler` cover work that may wait.
 Native Wayland panels run GTK in isolated helper processes; their messages are
 handled by the same scheduler so a GTK/display failure cannot terminate the
 automation process before its output cleanup.
@@ -58,7 +58,9 @@ dominates compile time; shared text helpers live in `runtime_internal.hpp`.
 
 The test harness and probes are separate executables. They compile at `-O1`
 (`loomwright_test_options`) because they are not performance critical, while
-`loomwright_core` keeps the release optimisation level. See
+`loomwright_core` keeps the release optimisation level. Clang builds can
+reuse matching ThinLTO backend work across these executables and incremental
+relinks. See
 [benchmark.md](benchmark.md) for the measured effect.
 
 ## Pipeline stages
@@ -102,7 +104,8 @@ waits for input until the panic key, Ctrl+C, or a script error stops it.
 It owns:
 
 - `ready_`: frames that can run now.
-- `timers_`: a deadline priority queue for `sleep_for`.
+- `timers_`: a deadline priority queue for `sleep_for`. A suspension ticket
+  stored in the promise distinguishes current timers from stale heap entries.
 - `fd_waiters_`: epoll registrations for `readable`.
 - `live_` / `live_order_`: spawned tasks, for shutdown and drain.
 - `known_`: every resumable frame, including awaited children that are not
@@ -172,9 +175,15 @@ coroutine frame; the parser marks the statements that may wait (`wait`, a tap,
 a glide, an expression that calls a user function) in `Node::may_suspend`.
 `eval` evaluates expressions and is a coroutine because a user-defined function
 may wait; `eval_pure` evaluates an expression that cannot wait, without a
-coroutine frame. `call_builtin` dispatches builtins on the enum resolved at parse time;
+coroutine frame. Call-free binary expressions can borrow literal and variable
+operands instead of copying them. `call_builtin` dispatches builtins on the
+enum resolved at parse time;
 `call_user_function` pushes a fresh scope, binds parameters, and caps recursion
-at `kMaxCallDepth = 32`. Loops cap at `kMaxLoop = 10000`.
+at `kMaxCallDepth = 32`. A single call-free `return` runs directly inside the
+callee frame. A synchronous `return` at the outer level of a longer function
+ends its body directly; nested returns still unwind the enclosing blocks.
+Callers still use the ordinary await boundary.
+Loops cap at `kMaxLoop = 10000`.
 
 ### GUI (`src/gui.cpp`, `src/runtime_gui.cpp`)
 

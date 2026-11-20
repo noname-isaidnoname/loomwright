@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(loomwright
-    VERSION 0.6.0
+    VERSION 0.6.1
     DESCRIPTION "A Linux-first desktop automation language and runtime"
     LANGUAGES C CXX)
 
@@ -92,9 +92,11 @@ if(NOT CMAKE_CXX_COMPILER_LAUNCHER)
     endif()
 endif()
 
+set(LOOMWRIGHT_LINKS_WITH_MOLD OFF)
 if(LOOMWRIGHT_USE_MOLD AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     find_program(LOOMWRIGHT_MOLD mold)
     if(LOOMWRIGHT_MOLD)
+        set(LOOMWRIGHT_LINKS_WITH_MOLD ON)
         add_link_options(-fuse-ld=mold)
         message(STATUS "loomwright: linking with mold (${LOOMWRIGHT_MOLD})")
     endif()
@@ -110,7 +112,7 @@ if(LOOMWRIGHT_LTO AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             set(LOOMWRIGHT_LTO_ENABLED ON)
-        elseif(LOOMWRIGHT_MOLD)
+        elseif(LOOMWRIGHT_LINKS_WITH_MOLD)
             set(LOOMWRIGHT_LTO_ENABLED ON)
         else()
             find_program(LOOMWRIGHT_LLD ld.lld)
@@ -127,6 +129,32 @@ if(LOOMWRIGHT_LTO_ENABLED)
     # test harness, links the bitcode the same way.
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
     message(STATUS "loomwright: link-time optimization enabled")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # Tests and probes link overlapping subsets of the same bitcode.
+        # Let ThinLTO reuse identical backend jobs without changing which
+        # code is optimized or the flags of installed targets.
+        set(thinlto_cache_dir "${CMAKE_BINARY_DIR}/thinlto-cache")
+        if(LOOMWRIGHT_LINKS_WITH_MOLD)
+            set(thinlto_linker mold)
+            set(thinlto_cache_flag "LINKER:-plugin-opt=cache-dir=${thinlto_cache_dir}")
+        else()
+            set(thinlto_linker lld)
+            set(thinlto_cache_flag "LINKER:--thinlto-cache-dir=${thinlto_cache_dir}")
+        endif()
+        # Old linker/plugin combinations may not recognize the cache flag.
+        # Test with actual bitcode so a plugin is loaded, not just the linker.
+        include(CMakePushCheckState)
+        cmake_push_check_state(RESET)
+        set(CMAKE_REQUIRED_FLAGS "-flto=thin")
+        set(CMAKE_REQUIRED_LINK_OPTIONS "-fuse-ld=${thinlto_linker}" "${thinlto_cache_flag}")
+        set(thinlto_check "LOOMWRIGHT_THINLTO_CACHE_${thinlto_linker}")
+        check_cxx_source_compiles("int main() { return 0; }" ${thinlto_check})
+        cmake_pop_check_state()
+        if(${thinlto_check})
+            add_link_options("$<$<LINK_LANGUAGE:CXX>:${thinlto_cache_flag}>")
+            message(STATUS "loomwright: ThinLTO backend cache enabled (${thinlto_linker})")
+        endif()
+    endif()
 else()
     message(STATUS "loomwright: link-time optimization disabled")
 endif()
@@ -185,14 +213,19 @@ add_library(loomwright_core STATIC
     src/picker_xcb.cpp
     src/picker_image.cpp
     src/gui.cpp
-    src/gui_wayland.cpp
     src/xcb_connection.cpp
     src/cli.cpp)
 target_include_directories(loomwright_core PUBLIC src)
 target_link_libraries(loomwright_core PUBLIC loomwright_options PkgConfig::X11 PkgConfig::XCB PkgConfig::LIBPNG)
+add_library(loomwright_wayland OBJECT src/gui_wayland.cpp)
+target_link_libraries(loomwright_wayland PRIVATE loomwright_options PkgConfig::XCB)
+target_sources(loomwright_core PRIVATE $<TARGET_OBJECTS:loomwright_wayland>)
 if(LOOMWRIGHT_WAYLAND AND GTK3_FOUND AND WAYLAND_FOUND)
-    target_link_libraries(loomwright_core PUBLIC PkgConfig::GTK3 PkgConfig::WAYLAND)
-    target_compile_definitions(loomwright_core PRIVATE LOOMWRIGHT_WAYLAND_GUI=1)
+    # Only the isolated helper uses toolkit headers/flags. The rest of the
+    # core and its consumers only need the final link dependencies.
+    target_link_libraries(loomwright_wayland PRIVATE PkgConfig::GTK3 PkgConfig::WAYLAND)
+    target_link_libraries(loomwright_core PRIVATE "$<LINK_ONLY:PkgConfig::GTK3>" "$<LINK_ONLY:PkgConfig::WAYLAND>")
+    target_compile_definitions(loomwright_wayland PRIVATE LOOMWRIGHT_WAYLAND_GUI=1)
     message(STATUS "loomwright: native Wayland panels enabled (GTK3)")
 elseif(NOT LOOMWRIGHT_WAYLAND)
     message(STATUS "loomwright: native Wayland panels disabled")
@@ -205,7 +238,7 @@ add_executable(loomwright src/main.cpp)
 target_link_libraries(loomwright PRIVATE loomwright_core)
 
 if(BUILD_TESTING)
-    target_compile_definitions(loomwright_core PRIVATE LOOMWRIGHT_WAYLAND_TEST_HOOKS=1)
+    target_compile_definitions(loomwright_wayland PRIVATE LOOMWRIGHT_WAYLAND_TEST_HOOKS=1)
     # The test harness and the probes are not performance critical: the code
     # they exercise lives in loomwright_core, which keeps the release optimisation
     # level. Building the harness itself at -O1 takes a noticeable slice off a

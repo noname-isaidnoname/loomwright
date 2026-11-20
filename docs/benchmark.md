@@ -1,6 +1,6 @@
 # Benchmark
 
-Measured build and test performance for Loomwright 0.6.0 on the maintainer's
+Measured build and test performance for Loomwright on the maintainer's
 machine (CachyOS, KDE Plasma, 4 jobs). Numbers are a snapshot, not a promise:
 always measure before and after a change and keep the evidence with the commit.
 If one of your changes shows no gain or causes a regression, consider trying a different approach; otherwise reject it and move on.
@@ -13,7 +13,8 @@ that approximate what a script does between two key presses:
 - `arith` — a nested integer-arithmetic loop with a string concatenation.
 - `await` — 10 000 calls to a user-defined function per repetition, so every
   call goes through the awaiting evaluator and the scheduler's coroutine
-  completion path.
+  completion path. The function itself has no `wait` or backend action; this
+  is not a timer- or fd-suspension benchmark.
 
 Neither workload prints, after 0.5.7 removed the `log` that made the old
 benchmark measure stdout. The front end (parse) is measured across the same
@@ -180,6 +181,100 @@ generation in the new standard mode. The point of the pass is a smaller API
 surface and less search noise in the source, not throughput. All 157 unit
 tests and the full CTest suite pass on both compilers.
 
+## Performance pass (0.6.1)
+
+Compared `4fcdbde` from a fresh `git archive` to the candidate on a
+CachyOS i7-7600U (2 cores / 4 threads), with Clang 23.1.5, mold 3.0.0,
+CMake 4.5.1 and Ninja 1.13.2. Builds use `release-clang`, `-j4`, new
+build directories and `CCACHE_DISABLE=1`; the release optimizer and
+hardening flags are unchanged. Runtime runs alternate baseline / candidate
+on logical CPU 3 with 10 repetitions and five trials per invocation.
+
+| Measurement | Baseline | Final |
+| --- | --- | --- |
+| Clean `-j4` wall time | 68.17 / 68.47 s | 62.15 s |
+| Rebuild of unchanged `value.cpp` object and dependents | 27.88 s | 1.63 s |
+| CTest `-j4` | 16.26 s | 8.06 s |
+| X11 GUI integration | 3.93 s | 2.08 s |
+| `arith` best / median | 29.41 / 26.74 ms | 18.25 / 19.28 ms |
+| `await` best / median | 191.16 / 174.62 ms | 12.14 / 12.92 ms |
+| `await` with real zero-duration timers | 203.04 / 221.65 ms | 23.47 / 23.67 ms |
+| Scheduler only (10,000 timer suspensions) | 8.58 / 8.67 ms | 7.63 / 7.75 ms |
+| Parse only | 7.7 / 7.5 μs | 7.3 / 7.7 μs |
+| CLI `.text` | 830,848 B | 740,256 B |
+| Benchmark `.text` | 498,932 B | 405,476 B |
+| Unit harness `.text` | 1,806,896 B | 1,122,704 B |
+
+The clean build gain is ~9%; `arith` improved ~25%,
+`await` ~92%, and the zero-duration-timer script ~89% (not a claim that
+epoll or an arbitrary real wait got nine times faster). Original script
+checksums stayed `2750275000` and `9700`. Allocations per run fell from
+29,972.1 to 10,003.1 (`arith`) and from 171,109.8 to 150,953.5 (`await`);
+the scheduler-only checksum stayed `570000` with allocations per
+repetition down from 10,159.3 to 159.3.
+
+### Changes
+
+- Binary expressions without calls borrow existing operands. String
+  concatenation reserves the result once, and assignment moves the
+  evaluated value into its destination.
+- A function consisting of one call-free `return` computes the result
+  without the body coroutine or an exception-based `return`; the caller
+  still awaits it through the scheduler. `perf record` showed exception
+  handling at the top of the baseline profile (`__gxx_personality_v0`
+  alone took 10.85% of samples); the candidate is dominated by evaluation
+  and hash-table work.
+- The scheduler keeps the current timer ticket in the promise instead of
+  allocating a hash node per suspension.
+- Assertion reporting moved off individual test sites, and GTK/Wayland
+  compile requirements are limited to the translation unit that uses
+  them. Compile commands for `runtime.cpp` and `test_runtime.cpp` went
+  from 22 system include directories to one, with `-O3` for the core,
+  ThinLTO and hardening retained.
+- Replacing screen-geometry regexes removed a heavy template
+  instantiation: `nm -C` found 137 `std::…regex…` symbols in the baseline
+  CLI and none in the candidate.
+- The X11 layout probe waits for the focused window to decode a key
+  under each new keyboard map instead of sleeping.
+
+### Rejected experiments
+
+- ThinLTO cache reuse across targets: backend objects with matching
+  settings are reused (a warm-cache link took 0.07 s vs 7.31 s cold and
+  matched byte-for-byte), but clean builds still optimize objects whose
+  import settings differ.
+- `-O0` on test-only objects (62.75 s), no ThinLTO on test translation
+  units (63.51 s), lld instead of mold (67.95 s), mixed LTO objects
+  (61.73 s), a multicall test binary (64.96 s), and a two-slot test
+  compile pool (65.84 s): all within noise of or worse than the default
+  62.15 s build.
+- Symmetric transfer from `FinalAwaiter` (return the continuation
+  directly): parity on `await` but ~1 ms slower on `arith`; the deferred
+  path stays for the "one place frames run" invariant.
+
+### Verification
+
+The final Ninja log puts the test executable link at 20.21 s, the CLI
+link at 18.74 s, and the benchmark link at 12.53 s; these overlap and
+cannot be added to estimate wall time. A fresh paired clean build took
+72.29 s at `4fcdbde` and 64.64 s on the candidate (~11% lower); all three
+candidate builds produced benchmark binaries matching round two
+byte-for-byte. Install-only builds (`-DBUILD_TESTING=OFF`) took 34.20 s
+originally and 31.19 s on the candidate, and a warm rebuild of an
+unchanged `value.cpp` and its dependents took 1.56 s full / 1.15 s
+install-only (original: 27.88 s / 8.17 s) — cache-hit relinks, not
+timings for an arbitrary edit.
+
+Both picker depths, including disconnect and screenshot-pixel cases, and
+the GUI integration passed five times each on one physical core, with
+the graphical resource lock in place. The final picker driver verified
+startup ownership and reported an injected SIGKILL failure without
+hanging cleanup. Clang 23.1.5 and GCC 16.2.1 both passed all 164 unit
+tests, the available integration tests, and all seven example checks;
+GCC runtime medians improved from 36.47 / 37.33 ms (`arith`) and 145.98 / 148.62 ms
+(`await`) to 21.36 / 21.33 ms and 15.60 / 16.71 ms with matching
+checksums.
+
 ## Results at 0.4.0
 
 | Measurement | Before | After |
@@ -237,10 +332,12 @@ performance critical, and the code it exercises is still optimized.
 ## How to reproduce
 
 ```bash
-# Cold build with an empty ccache
-ccache -C
-cmake --preset release
-time cmake --build build/release -j4
+# Cold builds: use fresh build directories and bypass ccache.
+git archive 4fcdbde | tar -x -C "$baseline_source"  # an empty, existing directory
+CCACHE_DISABLE=1 cmake --preset release-clang -S "$baseline_source" -B "$baseline_build"
+time env CCACHE_DISABLE=1 cmake --build "$baseline_build" -j4 -- -d stats
+CCACHE_DISABLE=1 cmake --preset release-clang -B "$candidate_build"
+time env CCACHE_DISABLE=1 cmake --build "$candidate_build" -j4 -- -d stats
 
 # Full test suite
 ctest --preset release

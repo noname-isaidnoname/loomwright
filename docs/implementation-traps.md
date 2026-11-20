@@ -158,6 +158,11 @@ freed memory. `Task::promise_type` tracks `parent`/`child`; `Scheduler::cancel`
 marks the whole chain and resumes its deepest frame so each awaiter unwinds
 with `TaskCancelled`.
 
+Timer heap entries can survive cancellation or frame destruction. Check a
+frame's membership in `known_` before dereferencing it, then require its
+current suspension ticket to match the entry. The handle alone cannot
+distinguish two waits on one frame or storage reused by a different frame.
+
 ### Dispatch runs as tasks
 
 Dispatch runs as tasks spawned onto the scheduler

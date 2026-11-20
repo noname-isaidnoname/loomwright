@@ -24,6 +24,7 @@ DISPLAY_NUMBERS=${DISPLAY_NUMBERS//,/ }
 SERVER_PID=
 SERVER_KIND=
 PIXEL_DIR=
+CAPTURE_DIR=
 UPLOAD_DIR=
 UPLOAD_PID=
 SCREEN=1368x768
@@ -38,6 +39,16 @@ fail() { echo "FAIL: $*"; exit 1; }
 [[ -x "$LIFECYCLE" ]] || skip "build the picker_lifecycle helper first (expected $LIFECYCLE)"
 [[ -x "$UPLOAD_PROBE" ]] || skip "build the picker_upload_probe helper first (expected $UPLOAD_PROBE)"
 command -v xdotool >/dev/null 2>&1 || skip "xdotool is not installed"
+
+owns_display_lock() {
+    local lock="/tmp/.X${1#:}-lock"
+    [[ -n ${SERVER_PID:-} && -r $lock ]] &&
+        [[ $(tr -d '[:space:]' < "$lock" 2>/dev/null) == "$SERVER_PID" ]]
+}
+
+private_server_alive() {
+    owns_display_lock "$1" && kill -0 "$SERVER_PID" 2>/dev/null
+}
 
 start_server() {
     local display=$1
@@ -57,13 +68,30 @@ start_server() {
         return 1
     fi
     for _ in $(seq 1 200); do
-        if DISPLAY=$display xdotool getmouselocation >/dev/null 2>&1; then return 0; fi
+        kill -0 "$SERVER_PID" 2>/dev/null || break
+        # A competing server can win the display after the socket check.
+        # A successful X client alone does not identify our child.
+        if private_server_alive "$display" &&
+            DISPLAY=$display xdotool getmouselocation >/dev/null 2>&1 &&
+            private_server_alive "$display"; then
+            return 0
+        fi
         sleep 0.02
     done
+    kill "$SERVER_PID" 2>/dev/null || :
+    wait "$SERVER_PID" 2>/dev/null || :
+    SERVER_PID=
+    SERVER_KIND=
     return 1
 }
 
 cleanup() {
+    # A disconnect probe can be blocked in an XCB reply while its second
+    # connection grabs the server. Signal the server before waiting on it.
+    if [[ -n ${SERVER_PID:-} ]]; then
+        kill -CONT "$SERVER_PID" 2>/dev/null
+        kill "$SERVER_PID" 2>/dev/null
+    fi
     if [[ -n ${UPLOAD_PID:-} ]]; then
         kill "$UPLOAD_PID" 2>/dev/null
         wait "$UPLOAD_PID" 2>/dev/null
@@ -76,9 +104,11 @@ cleanup() {
         rm -f "$PIXEL_DIR/scrot"
         rmdir "$PIXEL_DIR" 2>/dev/null
     fi
+    if [[ -n ${CAPTURE_DIR:-} ]]; then
+        rm -f "$CAPTURE_DIR/scrot" "$CAPTURE_DIR/import"
+        rmdir "$CAPTURE_DIR" 2>/dev/null
+    fi
     if [[ -n ${SERVER_PID:-} ]]; then
-        kill -CONT "$SERVER_PID" 2>/dev/null
-        kill "$SERVER_PID" 2>/dev/null
         wait "$SERVER_PID" 2>/dev/null
     fi
 }
@@ -106,7 +136,7 @@ run_picker() {
     local action=$1 out err pid rc
     out=$(mktemp)
     err=$(mktemp)
-    DISPLAY=$D PATH=${PICKER_PATH:-$PATH} "$BIN" --get-mouse-pos >"$out" 2>"$err" &
+    DISPLAY=$D PATH=${PICKER_PATH:-${CAPTURE_DIR:-$PATH}} "$BIN" --get-mouse-pos >"$out" 2>"$err" &
     pid=$!
     OVERLAY=
     for _ in $(seq 1 500); do
@@ -163,6 +193,19 @@ run_picker 'DISPLAY=$D "$EVENT" "$OVERLAY" button 1 300 200'
 [[ $RESULT_ERR != *"X Error"* ]] || fail "the picker lets an X error escape: $RESULT_ERR"
 echo "ok   picker left click -> $RESULT_OUT"
 
+# The left click above exercises automatic screenshot-tool discovery with
+# the real PATH. For the remaining Xvfb cases prefer real tools that capture
+# this private X display directly, without retrying desktop-session tools.
+# If neither is installed, keep the original tool selection throughout.
+if [[ $SERVER_KIND == xvfb ]]; then
+    for tool in scrot import; do
+        if capture_bin=$(type -P "$tool"); then
+            [[ -n $CAPTURE_DIR ]] || CAPTURE_DIR=$(mktemp -d)
+            ln -s "$capture_bin" "$CAPTURE_DIR/$tool" || fail "could not select private X11 capture tool"
+        fi
+    done
+fi
+
 # 2. Right click cancels with 130 and prints nothing.
 run_picker 'DISPLAY=$D "$EVENT" "$OVERLAY" button 3 400 300'
 [[ $RESULT_RC -eq 130 ]] || fail "right click exit code $RESULT_RC, expected 130"
@@ -209,20 +252,41 @@ BIN=$original_bin
 [[ $RESULT_OUT == 'ok   picker restores signal and X error handlers' ]] || fail "unexpected lifecycle output: $RESULT_OUT"
 echo "$RESULT_OUT"
 
-DISPLAY=$D "$UPLOAD_PROBE" cancel || fail 'picker upload cancellation cleanup failed'
+DISPLAY=$D PATH=${CAPTURE_DIR:-$PATH} "$UPLOAD_PROBE" cancel || fail 'picker upload cancellation cleanup failed'
 
 # Only terminate a server created by this script, never PICKER_TEST_DISPLAY.
 if [[ -n $SERVER_PID ]]; then
-    # Freeze the server while the picker keeps querying pointer/window state,
-    # then kill it with an XCB reply outstanding.
-    original_bin=$BIN
-    BIN=$LIFECYCLE
-    export PICKER_EXPECT_DISCONNECT=1
-    run_picker 'kill -STOP "$SERVER_PID"; sleep 0.3; kill -KILL "$SERVER_PID"; wait "$SERVER_PID" 2>/dev/null; lock="/tmp/.X${D#:}-lock"; if [[ -f $lock && $(tr -d "[:space:]" < "$lock") == "$SERVER_PID" ]]; then rm -f "$lock" "/tmp/.X11-unix/X${D#:}"; fi; SERVER_PID='
-    unset PICKER_EXPECT_DISCONNECT
-    BIN=$original_bin
-    [[ $RESULT_RC -eq 0 ]] || fail "disconnected picker lifecycle failed ($RESULT_RC): $RESULT_ERR"
-    [[ $RESULT_OUT == 'ok   picker disconnect releases fd and restores handlers' ]] || fail "unexpected disconnect output: $RESULT_OUT"
+    kill_private_server() {
+        local status=0
+        private_server_alive "$D" || fail "private X server is no longer owned on $D"
+        kill -KILL "$SERVER_PID" || fail "could not kill private X server on $D"
+        wait "$SERVER_PID" 2>/dev/null || status=$?
+        [[ $status == 137 ]] || fail "private X server on $D did not exit via SIGKILL (status $status)"
+        local lock="/tmp/.X${D#:}-lock"
+        if owns_display_lock "$D"; then
+            rm -f "/tmp/.X11-unix/X${D#:}" "$lock" || fail "could not remove dead server files on $D"
+        fi
+        SERVER_PID=
+    }
+    # Its separate XCB connection grabs the server before submitting the
+    # query. Once the probe reports the flush, the reply cannot arrive.
+    UPLOAD_DIR=$(mktemp -d)
+    mkfifo "$UPLOAD_DIR/control"
+    exec 3<>"$UPLOAD_DIR/control"
+    private_server_alive "$D" || fail 'private X server lost before lifecycle grab'
+    DISPLAY=$D PATH=${CAPTURE_DIR:-$PATH} PICKER_EXPECT_DISCONNECT=1 "$LIFECYCLE" >&3 2>"$UPLOAD_DIR/err" &
+    UPLOAD_PID=$!
+    IFS= read -r -t 20 -u 3 result && [[ $result == 'query pending' ]] ||
+        { cat "$UPLOAD_DIR/err" >&2; fail 'picker did not submit its pointer query'; }
+    kill_private_server
+    IFS= read -r -t 4 -u 3 result && [[ $result == 'ok   picker disconnect releases fd and restores handlers' ]] ||
+        { cat "$UPLOAD_DIR/err" >&2; fail 'disconnected picker lifecycle failed'; }
+    wait "$UPLOAD_PID" || fail 'disconnected picker lifecycle exited unsuccessfully'
+    UPLOAD_PID=
+    exec 3>&-
+    rm -f "$UPLOAD_DIR/control" "$UPLOAD_DIR/err"
+    rmdir "$UPLOAD_DIR"
+    UPLOAD_DIR=
     echo 'ok   picker survives server loss during an X11 operation'
 
     # The upload hook pauses after xcb_put_image_checked and before its check.
@@ -231,7 +295,7 @@ if [[ -n $SERVER_PID ]]; then
     UPLOAD_DIR=$(mktemp -d)
     mkfifo "$UPLOAD_DIR/control"
     exec 3<>"$UPLOAD_DIR/control"
-    DISPLAY=$D "$UPLOAD_PROBE" disconnect <"$UPLOAD_DIR/control" >"$UPLOAD_DIR/out" 2>"$UPLOAD_DIR/err" &
+    DISPLAY=$D PATH=${CAPTURE_DIR:-$PATH} "$UPLOAD_PROBE" disconnect <"$UPLOAD_DIR/control" >"$UPLOAD_DIR/out" 2>"$UPLOAD_DIR/err" &
     UPLOAD_PID=$!
     for _ in $(seq 1 500); do
         grep -q '^uploading$' "$UPLOAD_DIR/out" && break
@@ -239,13 +303,7 @@ if [[ -n $SERVER_PID ]]; then
         sleep 0.02
     done
     grep -q '^uploading$' "$UPLOAD_DIR/out" || fail 'upload probe did not reach checked request'
-    kill -KILL "$SERVER_PID"
-    wait "$SERVER_PID" 2>/dev/null
-    lock="/tmp/.X${D#:}-lock"
-    if [[ -f $lock && $(tr -d '[:space:]' < "$lock") == "$SERVER_PID" ]]; then
-        rm -f "$lock" "/tmp/.X11-unix/X${D#:}"
-    fi
-    SERVER_PID=
+    kill_private_server
     printf x >&3
     wait "$UPLOAD_PID" || { cat "$UPLOAD_DIR/err" >&2; fail 'upload disconnect cleanup failed'; }
     UPLOAD_PID=

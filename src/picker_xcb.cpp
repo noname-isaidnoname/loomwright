@@ -282,7 +282,7 @@ struct Picker {
         return attributes && attributes->map_state == XCB_MAP_STATE_VIEWABLE;
     }
 
-    void run() {
+    void run(const PickerQueryHook& query_hook) {
         auto* c = connection.get();
         xcb_map_window(c, overlay);
         xcb_map_window(c, tooltip);
@@ -291,6 +291,7 @@ struct Picker {
         xcb_flush(c);
         check();
         bool done = false;
+        bool query_hook_pending = static_cast<bool>(query_hook);
         const auto started = std::chrono::steady_clock::now();
         while (!done) {
             check();
@@ -320,7 +321,14 @@ struct Picker {
             check();
             if (done) break;
             if (cancelled_signal) { cancelled = true; break; }
-            Reply<xcb_query_pointer_reply_t> pointer(xcb_query_pointer_reply(c, xcb_query_pointer(c, overlay), nullptr), &std::free);
+            xcb_query_pointer_cookie_t query{};
+            if (query_hook_pending && focused) {
+                query_hook_pending = false;
+                query_hook([&] { query = xcb_query_pointer(c, overlay); xcb_flush(c); });
+            } else {
+                query = xcb_query_pointer(c, overlay);
+            }
+            Reply<xcb_query_pointer_reply_t> pointer(xcb_query_pointer_reply(c, query, nullptr), &std::free);
             check();
             if (pointer) {
                 const auto point = clamp_to_screen(pointer->root_x, pointer->root_y, width, height);
@@ -338,10 +346,8 @@ struct Picker {
     }
 };
 
-}  // namespace
-
-std::optional<std::pair<int, int>> pick_mouse_position_with_upload_hook(
-    bool verbose, const std::function<void(const std::string&)>& upload_hook) {
+std::optional<std::pair<int, int>> pick_mouse_position_impl(
+    bool verbose, const std::function<void(const std::string&)>& upload_hook, const PickerQueryHook& query_hook) {
     std::unique_ptr<Picker> picker;
     try { picker = std::make_unique<Picker>(); }
     catch (const std::exception&) {
@@ -360,12 +366,23 @@ std::optional<std::pair<int, int>> pick_mouse_position_with_upload_hook(
     if (cancelled_signal) return std::nullopt;
     picker->upload_screenshot(upload_hook ? std::function<void()>([&] { upload_hook(screenshot.path); }) : std::function<void()>());
     if (cancelled_signal) return std::nullopt;
-    picker->run();
+    picker->run(query_hook);
     return picker->cancelled ? std::nullopt : picker->result;
 }
 
+}  // namespace
+
+std::optional<std::pair<int, int>> pick_mouse_position_with_upload_hook(
+    bool verbose, const std::function<void(const std::string&)>& upload_hook) {
+    return pick_mouse_position_impl(verbose, upload_hook, {});
+}
+
+std::optional<std::pair<int, int>> pick_mouse_position_with_query_hook(const PickerQueryHook& hook) {
+    return pick_mouse_position_impl(false, {}, hook);
+}
+
 std::optional<std::pair<int, int>> pick_mouse_position_xcb(bool verbose) {
-    return pick_mouse_position_with_upload_hook(verbose, {});
+    return pick_mouse_position_impl(verbose, {}, {});
 }
 
 }  // namespace loomwright

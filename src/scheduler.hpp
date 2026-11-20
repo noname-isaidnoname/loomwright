@@ -46,6 +46,8 @@ struct Task {
         /// `known_` first.
         bool ready_queued = false;
         bool deferred_queued = false;
+        // Zero means no pending timer; each suspension gets a fresh ticket.
+        std::uint64_t timer_ticket = 0;
         std::exception_ptr error;
         /// The frame that awaits this one. It is handed back to the driver
         /// instead of resumed inline, so a chain of awaits cannot grow the
@@ -168,6 +170,7 @@ private:
     void resume_frame(handle_type handle);
     void resume(handle_type handle);
     void remove_waits(handle_type handle);
+    bool timer_pending(handle_type handle, std::uint64_t ticket) const;
     void remove_dependencies(handle_type handle);
     /// Resume every frame that was handed back while the current one ran.
     void drain_deferred();
@@ -187,8 +190,6 @@ private:
     std::deque<handle_type> ready_;
     std::priority_queue<Timer, std::vector<Timer>, TimerLater> timers_;
     std::uint64_t timer_sequence_ = 0;
-    // A timer belongs to one particular suspension, not merely a frame address.
-    std::unordered_map<handle_type, std::uint64_t, HandleHash> timer_waits_;
     std::unordered_map<int, handle_type> fd_waiters_;
     std::unordered_set<handle_type, HandleHash> live_;
     std::vector<handle_type> live_order_;

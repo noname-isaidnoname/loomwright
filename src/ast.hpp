@@ -40,6 +40,7 @@ enum class UnaryOp { Negate, Plus, Not };
 /// `List` carries its element expressions; `Index` carries a base and an index.
 struct Expr {
     enum class Kind { Literal, Variable, Unary, Binary, Call, List, Index };
+    enum class EventVariable : unsigned char { None, Key, Edge };
 
     Kind kind = Kind::Literal;
     Value literal;
@@ -54,6 +55,9 @@ struct Expr {
     /// to evaluate; an expression without one is evaluated without
     /// suspending, which keeps the hot path free of coroutine frames.
     bool may_wait = false;
+    /// True for an expression containing no function calls, including builtins.
+    bool call_free = true;
+    EventVariable event_variable = EventVariable::None;
     /// The built-in a `Call` node resolves to, resolved once by the parser.
     /// `Builtin::None` marks a call to a user-defined function.
     Builtin builtin = Builtin::None;

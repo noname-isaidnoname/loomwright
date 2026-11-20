@@ -164,6 +164,7 @@ void Scheduler::register_task(handle_type handle) {
 }
 
 void Scheduler::forget_task(handle_type handle) {
+    if (!handle) return;
     known_.erase(handle);
     remove_waits(handle);
     // The frame may still have an entry in ready_ or deferred_; pops skip
@@ -179,7 +180,7 @@ void Scheduler::forget_task(handle_type handle) {
 }
 
 void Scheduler::remove_waits(handle_type handle) {
-    timer_waits_.erase(handle);
+    handle.promise().timer_ticket = 0;
     std::erase(stop_waiters_, handle);
     std::erase(drain_waiters_, handle);
 }
@@ -255,9 +256,16 @@ void Scheduler::notify_finished(handle_type handle) {
 
 void Scheduler::suspend_until(handle_type handle, double seconds) {
     const double deadline = now() + (seconds > 0.0 ? seconds : 0.0);
-    const std::uint64_t sequence = timer_sequence_++;
-    timer_waits_[handle] = sequence;
+    const std::uint64_t sequence = ++timer_sequence_;
+    handle.promise().timer_ticket = sequence;
     timers_.push(Timer{deadline, sequence, handle});
+}
+
+bool Scheduler::timer_pending(handle_type handle, std::uint64_t ticket) const {
+    // An old heap entry may outlive its frame or point at storage reused for
+    // a new frame. Check membership before dereferencing, then require the
+    // ticket for this particular suspension (not just this address).
+    return known_.contains(handle) && handle.promise().timer_ticket == ticket;
 }
 
 int Scheduler::suspend_on_fd(handle_type handle, int fd) {
@@ -304,8 +312,8 @@ void Scheduler::wait_for_drain(handle_type handle) {
 }
 
 void Scheduler::resume_frame(handle_type handle) {
-    // A spawned task is live_; an awaited child is only known_. Both are resumable.
-    if (known_.find(handle) == known_.end()) [[unlikely]] return;
+    // The ready/deferred queue pop checked membership before touching the
+    // frame. No user code runs between that check and this call.
     // A frame that already reached its final suspend point must not be resumed.
     if (handle.done()) [[unlikely]] return;
     if (!handle.promise().started && handle.promise().cancelled) {
@@ -435,8 +443,7 @@ void Scheduler::run() {
 
         while (!timers_.empty()) {
             const Timer& timer = timers_.top();
-            const auto wait = timer_waits_.find(timer.handle);
-            if (wait != timer_waits_.end() && wait->second == timer.sequence) break;
+            if (timer_pending(timer.handle, timer.sequence)) break;
             timers_.pop();
         }
 
@@ -470,9 +477,8 @@ void Scheduler::run() {
         while (!timers_.empty() && timers_.top().deadline <= time_now) {
             const Timer timer = timers_.top();
             timers_.pop();
-            const auto wait = timer_waits_.find(timer.handle);
-            if (wait != timer_waits_.end() && wait->second == timer.sequence) {
-                timer_waits_.erase(wait);
+            if (timer_pending(timer.handle, timer.sequence)) {
+                timer.handle.promise().timer_ticket = 0;
                 push_ready(timer.handle);
             }
         }

@@ -84,11 +84,17 @@ wait; it cannot return its result through a plain return value. An expression
 that cannot wait is evaluated by `eval_pure()`, and a statement that cannot
 wait by `execute_pure()`, so the common path of a script does not allocate a
 coroutine frame. The parser marks the expressions and the statements that may
-wait.
+wait. It also marks call-free expression trees, letting binary operators
+borrow values without risking a callback invalidating the reference. Variable
+nodes resolve `event_key` and `event_edge` at parse time.
 
 The parser resolves every call site to a `Builtin` enumerator once; `Runtime::call_builtin()`
 dispatches on the enum. `call_user_function()` binds parameters into a fresh scope, pushes it, runs the
-body, and pops it on the way out. A function can read the script's variables
+body, and pops it on the way out. A body consisting of one call-free `return`
+does not need its own coroutine or a return signal. A longer body can also
+return without a signal when its outer block reaches a synchronous `return`;
+nested or suspending returns still use the existing unwind path. The outer
+user-function await is unchanged. A function can read the script's variables
 but its own assignments stay local.
 
 ## Builtins

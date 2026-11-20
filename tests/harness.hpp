@@ -1,14 +1,11 @@
 #pragma once
 
-#include <cstdio>
 #include <functional>
-#include <iostream>
 #include <sstream>
-#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
-#include <unistd.h>
 
 namespace loomwright_test {
 
@@ -23,7 +20,9 @@ struct Registrar {
     Registrar(const char* name, void (*function)()) { registry().push_back(TestCase{name, function}); }
 };
 
-void fail(const std::string& location, const std::string& message);
+[[noreturn]] void fail(const char* file, int line, std::string_view message);
+[[noreturn]] void fail_equal(const char* file, int line, std::string_view message,
+                             const std::string& actual, const std::string& expected);
 
 template <typename T>
 std::string to_text(const T& value) {
@@ -33,6 +32,7 @@ std::string to_text(const T& value) {
 }
 
 inline std::string to_text(bool value) { return value ? "true" : "false"; }
+inline const std::string& to_text(const std::string& value) { return value; }
 
 inline std::string to_text(const std::vector<std::string>& values) {
     std::string out;
@@ -43,6 +43,14 @@ inline std::string to_text(const std::vector<std::string>& values) {
     return "[" + out + "]";
 }
 
+// Keep formatting and string temporaries off the assertion sites, including
+// when LTO can see the reporting code.
+template <typename Actual, typename Expected>
+[[noreturn, gnu::cold, gnu::noinline]] void report_equal_failure(
+    const char* file, int line, std::string_view message, const Actual& actual, const Expected& expected) {
+    fail_equal(file, line, message, to_text(actual), to_text(expected));
+}
+
 /// stdout/stderr captured while `fn` ran.
 struct CapturedOutput {
     int code = 0;
@@ -51,54 +59,7 @@ struct CapturedOutput {
 };
 
 /// Run `fn` with stdout and stderr redirected to pipes and return what it printed.
-inline CapturedOutput capture_output(const std::function<int()>& fn) {
-    int out_pipe[2] = {-1, -1};
-    int err_pipe[2] = {-1, -1};
-    if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
-        throw std::runtime_error("capture_output: pipe failed");
-    }
-    const int saved_out = dup(STDOUT_FILENO);
-    const int saved_err = dup(STDERR_FILENO);
-    std::cout.flush();
-    std::cerr.flush();
-    std::fflush(nullptr);
-    dup2(out_pipe[1], STDOUT_FILENO);
-    dup2(err_pipe[1], STDERR_FILENO);
-    close(out_pipe[1]);
-    close(err_pipe[1]);
-
-    CapturedOutput result;
-    try {
-        result.code = fn();
-    } catch (...) {
-        dup2(saved_out, STDOUT_FILENO);
-        dup2(saved_err, STDERR_FILENO);
-        close(saved_out);
-        close(saved_err);
-        close(out_pipe[0]);
-        close(err_pipe[0]);
-        throw;
-    }
-    std::cout.flush();
-    std::cerr.flush();
-    std::fflush(nullptr);
-    dup2(saved_out, STDOUT_FILENO);
-    dup2(saved_err, STDERR_FILENO);
-    close(saved_out);
-    close(saved_err);
-
-    const auto drain = [](int fd) {
-        std::string text;
-        char buffer[4096];
-        ssize_t count = 0;
-        while ((count = read(fd, buffer, sizeof(buffer))) > 0) text.append(buffer, static_cast<size_t>(count));
-        close(fd);
-        return text;
-    };
-    result.out = drain(out_pipe[0]);
-    result.err = drain(err_pipe[0]);
-    return result;
-}
+CapturedOutput capture_output(const std::function<int()>& fn);
 
 /// Trim trailing newlines so CHECK_EQ reads naturally.
 inline std::string strip_trailing_newlines(std::string text) {
@@ -118,7 +79,7 @@ int run_all(const std::string& filter = std::string());
 #define CHECK_TRUE(expression)                                              \
     do {                                                                    \
         if (!(expression)) {                                                \
-            ::loomwright_test::fail(std::string(__FILE__) + ":" + std::to_string(__LINE__), \
+            ::loomwright_test::fail(__FILE__, __LINE__,                       \
                                  "CHECK_TRUE(" #expression ")");       \
         }                                                                   \
     } while (false)
@@ -128,10 +89,8 @@ int run_all(const std::string& filter = std::string());
         const auto& actual_value_ = (actual);                                                   \
         const auto& expected_value_ = (expected);                                               \
         if (!(actual_value_ == expected_value_)) {                                              \
-            ::loomwright_test::fail(std::string(__FILE__) + ":" + std::to_string(__LINE__),       \
-                                 std::string("CHECK_EQ(" #actual ", " #expected ")\n  actual:   ") + \
-                                     ::loomwright_test::to_text(actual_value_) +                   \
-                                     "\n  expected: " + ::loomwright_test::to_text(expected_value_)); \
+            ::loomwright_test::report_equal_failure(__FILE__, __LINE__,                          \
+                "CHECK_EQ(" #actual ", " #expected ")", actual_value_, expected_value_);         \
         }                                                                                       \
     } while (false)
 
@@ -145,7 +104,7 @@ int run_all(const std::string& filter = std::string());
         } catch (...) {                                                            \
         }                                                                          \
         if (!caught_) {                                                            \
-            ::loomwright_test::fail(std::string(__FILE__) + ":" + std::to_string(__LINE__), \
+            ::loomwright_test::fail(__FILE__, __LINE__,                             \
                                  "expected " #exception_type " from " #expression); \
         }                                                                          \
     } while (false)

@@ -1,29 +1,26 @@
 #include "runtime.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
-#include <chrono>
+#include <charconv>
 #include <cmath>
 #include <csignal>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
-#include <fstream>
 #include <iostream>
+#include <limits>
 #include <linux/input.h>
 #include <optional>
-#include <regex>
-#include <sstream>
 #include <stdexcept>
 #include <sys/signalfd.h>
-#include <unordered_map>
 #include <unistd.h>
 
 #include "builtins.hpp"
 #include "errors.hpp"
 #include "keys.hpp"
 #include "runtime_internal.hpp"
+#include "screen_geometry.hpp"
 #include "subprocess.hpp"
 
 
@@ -183,6 +180,14 @@ Value apply_unary(UnaryOp op, const Value& value) {
 /// The result of a binary operator on two evaluated operands. The operands
 /// are already evaluated, so the operator itself never waits.
 Value apply_binary(BinaryOp op, const Value& left, const Value& right) {
+    if (left.type == Value::Type::Int && right.type == Value::Type::Int) {
+        switch (op) {
+            case BinaryOp::Add: return Value::of_int(left.integer + right.integer);
+            case BinaryOp::Subtract: return Value::of_int(left.integer - right.integer);
+            case BinaryOp::Multiply: return Value::of_int(left.integer * right.integer);
+            default: break;
+        }
+    }
     switch (op) {
         case BinaryOp::Equal:
             return Value::of_bool(value_equals(left, right));
@@ -202,7 +207,13 @@ Value apply_binary(BinaryOp op, const Value& left, const Value& right) {
         }
         case BinaryOp::Add: {
             if (left.type == Value::Type::Str && right.type == Value::Type::Str) {
-                return Value::of_str(left.text + right.text);
+                std::string joined;
+                if (right.text.size() > joined.max_size() - left.text.size()) {
+                    throw std::length_error("string concatenation exceeds maximum size");
+                }
+                joined.reserve(left.text.size() + right.text.size());
+                joined.append(left.text).append(right.text);
+                return Value::of_str(std::move(joined));
             }
             if (left.is_list() && right.is_list()) {
                 const std::vector<Value>& right_items = right.list_items();
@@ -221,6 +232,10 @@ Value apply_binary(BinaryOp op, const Value& left, const Value& right) {
                                      ": '" + type_name(left) + "' and '" + type_name(right) + "'");
     }
     const bool want_float = left.type == Value::Type::Float || right.type == Value::Type::Float;
+    // Non-float numeric operands are already known to be integers or bools.
+    const auto integer = [](const Value& operand) static {
+        return operand.type == Value::Type::Int ? operand.integer : static_cast<long long>(operand.boolean);
+    };
     switch (op) {
         case BinaryOp::Divide: {
             const double divisor = right.as_double();
@@ -229,9 +244,9 @@ Value apply_binary(BinaryOp op, const Value& left, const Value& right) {
         }
         case BinaryOp::Modulo: {
             if (!want_float) {
-                const long long divisor = right.as_int();
+                const long long divisor = integer(right);
                 if (divisor == 0) throw RuntimeErrorLoomwright("Division by zero");
-                const long long value = left.as_int();
+                const long long value = integer(left);
                 long long result = value % divisor;
                 if (result != 0 && ((result < 0) != (divisor < 0))) result += divisor;
                 return Value::of_int(result);
@@ -244,13 +259,13 @@ Value apply_binary(BinaryOp op, const Value& left, const Value& right) {
         }
         case BinaryOp::Add:
             return want_float ? Value::of_float(left.as_double() + right.as_double())
-                              : Value::of_int(left.as_int() + right.as_int());
+                              : Value::of_int(integer(left) + integer(right));
         case BinaryOp::Subtract:
             return want_float ? Value::of_float(left.as_double() - right.as_double())
-                              : Value::of_int(left.as_int() - right.as_int());
+                              : Value::of_int(integer(left) - integer(right));
         case BinaryOp::Multiply:
             return want_float ? Value::of_float(left.as_double() * right.as_double())
-                              : Value::of_int(left.as_int() * right.as_int());
+                              : Value::of_int(integer(left) * integer(right));
         default:
             break;
     }
@@ -337,8 +352,133 @@ std::string hotkey_id_for_name(const std::string& raw_name) {
     return canonical_key(name);
 }
 
+bool ascii_digit(char c) { return c >= '0' && c <= '9'; }
+
+bool take_char(std::string_view& text, char c) {
+    if (!text.starts_with(c)) return false;
+    text.remove_prefix(1);
+    return true;
+}
+
+bool take_number(std::string_view& text, int& value, bool signed_number = false) {
+    if (text.empty() || (!ascii_digit(text.front()) && !(signed_number && text.front() == '-'))) return false;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (error != std::errc()) return false;
+    text.remove_prefix(static_cast<size_t>(end - text.data()));
+    return true;
+}
+
+bool take_dimensions(std::string_view& text, int& width, int& height) {
+    return take_number(text, width) && width > 0 &&
+           take_char(text, 'x') && take_number(text, height) && height > 0;
+}
+
+bool take_whitespace(std::string_view& text) {
+    const size_t first = text.find_first_not_of(" \t\n\r\v\f");
+    if (first == 0 || first == std::string_view::npos) return false;
+    text.remove_prefix(first);
+    return true;
+}
+
+/// Find a `width x height` field and match its tool-specific suffix. Scan
+/// digit runs rather than trying every digit in a failed field.
+bool find_dimensions(std::string_view text, int& width, int& height, auto match_suffix) {
+    while (!text.empty()) {
+        const size_t digit = text.find_first_of("0123456789");
+        if (digit == std::string_view::npos) return false;
+        text.remove_prefix(digit);
+        auto suffix = text;
+        if (take_dimensions(suffix, width, height) && match_suffix(suffix)) return true;
+        const size_t next = text.find_first_not_of("0123456789");
+        if (next == std::string_view::npos) return false;
+        text.remove_prefix(next);
+    }
+    return false;
+}
+
+std::string_view take_line(std::string_view& text) {
+    const size_t end = text.find('\n');
+    const auto line = text.substr(0, end);
+    text.remove_prefix(end == std::string_view::npos ? line.size() : end + 1);
+    return line;
+}
+
+bool take_offset(std::string_view& text, int& offset) {
+    // xrandr uses a literal '+' followed by a signed decimal in some
+    // versions. Also handle the usual X geometry spelling (e.g. -1920+0).
+    if (!take_char(text, '+') && !text.starts_with('-')) return false;
+    return take_number(text, offset, true);
+}
+
 }  // namespace
 
+std::optional<std::pair<int, int>> detail::parse_wlr_randr(std::string_view output) {
+    int width = 0;
+    int height = 0;
+    while (!output.empty()) {
+        const auto line = take_line(output);
+        int mode_width, mode_height;
+        if (find_dimensions(line, mode_width, mode_height, [](std::string_view suffix) static {
+                return take_whitespace(suffix) && suffix.starts_with("px");
+            })) {
+            width = std::max(width, mode_width);
+            height = std::max(height, mode_height);
+        }
+    }
+    if (width > 0 && height > 0) return std::pair{width, height};
+    return std::nullopt;
+}
+
+std::optional<std::pair<int, int>> detail::parse_xrandr(std::string_view output) {
+    bool found = false;
+    long long min_x = 0, min_y = 0, max_x = 0, max_y = 0;
+    constexpr std::string_view connected = " connected ";
+    while (!output.empty()) {
+        auto line = take_line(output);
+        const auto field = line.find(connected);
+        if (field == std::string_view::npos) continue;
+        line.remove_prefix(field + connected.size());
+        if (line.starts_with("primary ")) line.remove_prefix(sizeof("primary ") - 1);
+        const auto geometry = line.substr(0, line.find_first_of(" \t\r"));
+        auto rest = geometry;
+        int width, height, x, y;
+        if (!take_dimensions(rest, width, height) ||
+            !take_offset(rest, x) || !take_offset(rest, y) || !rest.empty()) continue;
+        const long long right = static_cast<long long>(x) + width;
+        const long long bottom = static_cast<long long>(y) + height;
+        if (!found) {
+            min_x = x;
+            min_y = y;
+            max_x = right;
+            max_y = bottom;
+            found = true;
+        } else {
+            min_x = std::min(min_x, static_cast<long long>(x));
+            min_y = std::min(min_y, static_cast<long long>(y));
+            max_x = std::max(max_x, right);
+            max_y = std::max(max_y, bottom);
+        }
+    }
+    const long long width = max_x - std::min(0LL, min_x);
+    const long long height = max_y - std::min(0LL, min_y);
+    if (!found || width > std::numeric_limits<int>::max() || height > std::numeric_limits<int>::max()) {
+        return std::nullopt;
+    }
+    return std::pair{static_cast<int>(std::max(1LL, width)), static_cast<int>(std::max(1LL, height))};
+}
+
+std::optional<std::pair<int, int>> detail::parse_xdpyinfo(std::string_view text) {
+    constexpr std::string_view prefix = "dimensions:";
+    for (size_t where = text.find(prefix); where != std::string_view::npos; where = text.find(prefix)) {
+        text.remove_prefix(where + prefix.size());
+        auto suffix = text;
+        int width, height;
+        if (take_whitespace(suffix) && take_dimensions(suffix, width, height) && suffix.starts_with(" pixels")) {
+            return std::pair{width, height};
+        }
+    }
+    return std::nullopt;
+}
 
 std::string canonical_key(const std::string& name) { return canonical_key_name(name); }
 
@@ -357,20 +497,7 @@ std::pair<int, int> detect_screen_size() {
     if (!wlr.empty()) {
         const CommandResult result = run_command({wlr}, std::string(), 2000);
         if (result.returncode == 0) {
-            static const std::regex pattern(R"((\d+)x(\d+)\s+px)");
-            int width = 0;
-            int height = 0;
-            std::string line;
-            std::istringstream stream(result.out);
-            while (std::getline(stream, line)) {
-                if (!line.contains(" px")) continue;
-                std::smatch match;
-                if (std::regex_search(line, match, pattern)) {
-                    width = std::max(width, std::stoi(match[1].str()));
-                    height = std::max(height, std::stoi(match[2].str()));
-                }
-            }
-            if (width > 0 && height > 0) return {width, height};
+            if (const auto size = detail::parse_wlr_randr(result.out)) return *size;
         }
     }
 
@@ -378,38 +505,7 @@ std::pair<int, int> detect_screen_size() {
     if (!xrandr.empty()) {
         const CommandResult result = run_command({xrandr, "--current"}, std::string(), 2000);
         if (result.returncode == 0) {
-            static const std::regex pattern(R"((\d+)x(\d+)\+(-?\d+)\+(-?\d+))");
-            bool found = false;
-            int min_x = 0;
-            int min_y = 0;
-            int max_x = 0;
-            int max_y = 0;
-            std::istringstream stream(result.out);
-            std::string line;
-            while (std::getline(stream, line)) {
-                if (!line.contains(" connected")) continue;
-                std::smatch match;
-                if (!std::regex_search(line, match, pattern)) continue;
-                const int width = std::stoi(match[1].str());
-                const int height = std::stoi(match[2].str());
-                const int x = std::stoi(match[3].str());
-                const int y = std::stoi(match[4].str());
-                if (!found) {
-                    min_x = x;
-                    min_y = y;
-                    max_x = x + width;
-                    max_y = y + height;
-                    found = true;
-                } else {
-                    min_x = std::min(min_x, x);
-                    min_y = std::min(min_y, y);
-                    max_x = std::max(max_x, x + width);
-                    max_y = std::max(max_y, y + height);
-                }
-            }
-            if (found) {
-                return {std::max(1, max_x - std::min(0, min_x)), std::max(1, max_y - std::min(0, min_y))};
-            }
+            if (const auto size = detail::parse_xrandr(result.out)) return *size;
         }
     }
 
@@ -417,11 +513,7 @@ std::pair<int, int> detect_screen_size() {
     if (!xdpyinfo.empty()) {
         const CommandResult result = run_command({xdpyinfo}, std::string(), 2000);
         if (result.returncode == 0) {
-            static const std::regex pattern(R"(dimensions:\s+(\d+)x(\d+) pixels)");
-            std::smatch match;
-            if (std::regex_search(result.out, match, pattern)) {
-                return {std::stoi(match[1].str()), std::stoi(match[2].str())};
-            }
+            if (const auto size = detail::parse_xdpyinfo(result.out)) return *size;
         }
     }
     return {1920, 1080};
@@ -836,9 +928,15 @@ Task Runtime::dispatch(const Node& event, std::string key, std::string edge) {
     co_await execute_nodes(event.body, context);
 }
 
-Task Runtime::execute_nodes(const std::vector<Node>& nodes, const EventContext& context) {
+Task Runtime::execute_nodes(const std::vector<Node>& nodes, const EventContext& context, Value* function_result) {
     for (const auto& node : nodes) {
         if (scheduler_.stop_requested()) [[unlikely]] co_return;
+        // A direct, synchronous return is already in the function's outer
+        // block. Nested returns still unwind enclosing loops and statements.
+        if (function_result != nullptr && node.stmt == StmtKind::Return && !node.may_suspend) {
+            if (!node.exprs.empty()) *function_result = eval_pure(*node.exprs.front(), context);
+            co_return;
+        }
         if (node.may_suspend) {
             co_await execute(node, context);
         } else {
@@ -869,7 +967,7 @@ std::vector<std::string> Runtime::key_names(const Node& node) const {
 /// The action of a statement whose expressions are already evaluated. `first`
 /// and `second` hold the first and the second expression of the statement; a
 /// statement with fewer expressions ignores the extra ones.
-void Runtime::run_action(const Node& node, const Value& first, const Value& second,
+void Runtime::run_action(const Node& node, Value& first, const Value& second,
                          const EventContext& context) {
     switch (node.stmt) {
         case StmtKind::Cursor: {
@@ -956,7 +1054,7 @@ void Runtime::run_action(const Node& node, const Value& first, const Value& seco
             launch_program(first.to_string());
             break;
         case StmtKind::Set:
-            assign_variable(node.a, first);
+            assign_variable(node.a, std::move(first));
             break;
         case StmtKind::Break:
             if (loop_depth_ == 0) throw RuntimeErrorLoomwright("break outside a loop");
@@ -967,7 +1065,7 @@ void Runtime::run_action(const Node& node, const Value& first, const Value& seco
         case StmtKind::Return: {
             if (function_depth_ == 0) throw RuntimeErrorLoomwright("return outside a function");
             ReturnSignal signal;
-            if (!node.exprs.empty()) signal.value = first;
+            if (!node.exprs.empty()) signal.value = std::move(first);
             throw signal;
         }
         case StmtKind::Assert:
@@ -996,6 +1094,9 @@ void Runtime::run_action(const Node& node, const Value& first, const Value& seco
 /// statement runs in the caller's stack frame.
 void Runtime::execute_pure(const Node& node, const EventContext& context) {
     switch (node.stmt) {
+        case StmtKind::Set:
+            assign_variable(node.a, eval_pure(*node.exprs.at(0), context));
+            break;
         case StmtKind::If: {
             const Value condition = eval_pure(*node.exprs.at(0), context);
             execute_nodes_pure(condition.truthy() ? node.body : node.otherwise, context);
@@ -1313,11 +1414,13 @@ const Value* Runtime::lookup_variable(const std::string& name) const {
 }
 
 void Runtime::assign_variable(const std::string& name, Value value) {
-    if (!function_scopes_.empty()) {
-        function_scopes_.back()[name] = std::move(value);
+    auto& scope = function_scopes_.empty() ? variables_ : function_scopes_.back();
+    auto& target = scope[name];
+    if (target.type == Value::Type::Int && value.type == Value::Type::Int) {
+        target.integer = value.integer;
         return;
     }
-    variables_[name] = std::move(value);
+    target = std::move(value);
 }
 
 Task Runtime::call_user_function(const Function& function, std::vector<Value> args, const EventContext& context,
@@ -1349,10 +1452,23 @@ Task Runtime::call_user_function(const Function& function, std::vector<Value> ar
     const auto pop = make_scope_exit([this] { function_scopes_.pop_back(); });
 
     out = Value::none();
+    // A single, call-free return cannot suspend, invoke a backend, or run
+    // another task. Keep the surrounding call's normal await boundary, but
+    // avoid the body frame and exception-based return in this case.
+    if (function.body.size() == 1) {
+        const Node& node = function.body.front();
+        if (node.stmt == StmtKind::Return &&
+            (node.exprs.empty() || node.exprs.front()->call_free)) {
+            if (!scheduler_.stop_requested() && !node.exprs.empty()) {
+                out = eval_pure(*node.exprs.front(), context);
+            }
+            co_return;
+        }
+    }
     try {
-        co_await execute_nodes(function.body, context);
-    } catch (const ReturnSignal& signal) {
-        out = signal.value;
+        co_await execute_nodes(function.body, context, &out);
+    } catch (ReturnSignal& signal) {
+        out = std::move(signal.value);
     }
 }
 
@@ -1849,13 +1965,22 @@ Task Runtime::eval(const ExprPtr& expr, const EventContext& context, Value& out)
     }
 }
 
+const Value& Runtime::eval_operand(const Expr& expr, const EventContext& context, std::optional<Value>& storage) {
+    if (expr.kind == Expr::Kind::Literal) return expr.literal;
+    if (expr.kind == Expr::Kind::Variable && expr.event_variable == Expr::EventVariable::None) {
+        if (const Value* found = lookup_variable(expr.name)) return *found;
+        [[unlikely]] throw RuntimeErrorLoomwright("Unknown variable " + quote_string(expr.name));
+    }
+    return storage.emplace(eval_pure(expr, context));
+}
+
 Value Runtime::eval_pure(const Expr& expr, const EventContext& context) {
     switch (expr.kind) {
         case Expr::Kind::Literal:
             return expr.literal;
         case Expr::Kind::Variable: {
-            if (expr.name == "event_key") return Value::of_str(context.key);
-            if (expr.name == "event_edge") return Value::of_str(context.edge);
+            if (expr.event_variable == Expr::EventVariable::Key) return Value::of_str(context.key);
+            if (expr.event_variable == Expr::EventVariable::Edge) return Value::of_str(context.edge);
             if (const Value* found = lookup_variable(expr.name)) return *found;
             [[unlikely]] throw RuntimeErrorLoomwright("Unknown variable " + quote_string(expr.name));
         }
@@ -1890,6 +2015,14 @@ Value Runtime::eval_pure(const Expr& expr, const EventContext& context) {
                 const Value left = eval_pure(*expr.args.at(0), context);
                 if (is_and ? !left.truthy() : left.truthy()) return Value::of_bool(!is_and);
                 return Value::of_bool(eval_pure(*expr.args.at(1), context).truthy());
+            }
+            // A function call can reenter the runtime or mutate a list.
+            // Borrow only when neither operand can call any function.
+            if (expr.call_free) {
+                std::optional<Value> left;
+                std::optional<Value> right;
+                return apply_binary(op, eval_operand(*expr.args.at(0), context, left),
+                                    eval_operand(*expr.args.at(1), context, right));
             }
             return apply_binary(op, eval_pure(*expr.args.at(0), context), eval_pure(*expr.args.at(1), context));
         }

@@ -545,8 +545,9 @@ loom "startup-failure" {
 }
 
 TEST_CASE(cancellation_during_cleanup_still_drains_before_closing_backend) {
-    Runtime runtime(parse("loom \"cleanup-cancel\" { when app starts { log \"ready\" } }"));
+    // The backend also observes this flag when Runtime closes it on destruction.
     bool dependency_done = false;
+    Runtime runtime(parse("loom \"cleanup-cancel\" { when app starts { log \"ready\" } }"));
     auto backend = std::make_unique<ObserveCloseBackend>(dependency_done);
     auto* raw = backend.get();
     runtime.set_backend(std::move(backend));

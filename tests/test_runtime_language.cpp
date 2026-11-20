@@ -8,6 +8,7 @@
 #include "parser.hpp"
 #include "runtime.hpp"
 #include "scheduler.hpp"
+#include "screen_geometry.hpp"
 
 using namespace loomwright;
 using loomwright_test::eval_expression;
@@ -19,6 +20,9 @@ TEST_CASE(evaluates_language_expressions) {
     CHECK_EQ(eval_expression("1 / 2").to_string(), std::string("0.5"));
     CHECK_EQ(eval_expression("7 % 3").to_string(), std::string("1"));
     CHECK_EQ(eval_expression("-7 % 3").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("true + 2").to_string(), std::string("3"));
+    CHECK_EQ(eval_expression("-7 % true").to_string(), std::string("0"));
+    CHECK_EQ(eval_expression("true * 2.5").to_string(), std::string("2.5"));
     CHECK_EQ(eval_expression("\"ab\" + \"cd\"").to_string(), std::string("abcd"));
     CHECK_EQ(eval_expression("clamp(12, 0, 10)").to_string(), std::string("10"));
     CHECK_EQ(eval_expression("round(2.5)").to_string(), std::string("2"));
@@ -32,6 +36,27 @@ TEST_CASE(evaluates_language_expressions) {
     CHECK_EQ(eval_expression("true and false").to_string(), std::string("false"));
     CHECK_EQ(eval_expression("floor(2.9)").to_string(), std::string("2"));
     CHECK_EQ(eval_expression("ceil(2.1)").to_string(), std::string("3"));
+}
+
+TEST_CASE(pure_binary_operands_preserve_string_list_and_event_values) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "operands" {
+    when key A goes down {
+        set text = "0123456789abcdef"
+        set text = text + (event_key + text)
+        set items = [1, 2]
+        set joined = items + items
+        set observed = [1] + append(items, 3)
+    }
+}
+)LOOMWRIGHT");
+    Runtime runtime(script);
+    runtime.set_backend(std::make_unique<RecordingBackend>());
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0), "A", "down"));
+    runtime.scheduler().run();
+    CHECK_EQ(runtime.variables().at("text").to_string(), "0123456789abcdefA0123456789abcdef");
+    CHECK_EQ(runtime.variables().at("joined").to_string(), "[1, 2, 1, 2]");
+    CHECK_EQ(runtime.variables().at("observed").to_string(), "[1, 1, 2, 3]");
 }
 
 TEST_CASE(executes_statement_flow) {
@@ -118,6 +143,35 @@ TEST_CASE(screen_option_is_parsed_and_validated) {
     CHECK_THROWS(parse_screen_option(&invalid, {1920, 1080}), RuntimeErrorLoomwright);
     const Value not_a_string = Value::of_int(5);
     CHECK_THROWS(parse_screen_option(&not_a_string, {1920, 1080}), RuntimeErrorLoomwright);
+}
+
+TEST_CASE(screen_geometry_parses_compositor_tool_outputs) {
+    const auto wl = detail::parse_wlr_randr("DP-2\n  800x600 px\n  1920x1080 px, 60 Hz\n");
+    CHECK_TRUE(wl.has_value());
+    CHECK_EQ(wl->first, 1920);
+    CHECK_EQ(wl->second, 1080);
+    const auto x11 = detail::parse_xrandr(
+        "Screen 0: minimum 8 x 8\nDP-1 connected 1920x1080+-1920+0 (normal)\n"
+        "HDMI-1 connected primary 2560x1440+0+0 (normal)\nDP-2 disconnected 800x600+5000+5000\n");
+    CHECK_TRUE(x11.has_value());
+    CHECK_EQ(x11->first, 4480);
+    CHECK_EQ(x11->second, 1440);
+    const auto negative = detail::parse_xrandr("DP-1 connected 1920x1080-100-200\n");
+    CHECK_TRUE(negative.has_value());
+    CHECK_EQ(negative->first, 1920);
+    CHECK_EQ(negative->second, 1080);
+    const auto info = detail::parse_xdpyinfo("screen #0:\n  dimensions:\t1368x768 pixels (355x200 millimeters)\n");
+    CHECK_TRUE(info.has_value());
+    CHECK_EQ(info->first, 1368);
+    CHECK_EQ(info->second, 768);
+}
+
+TEST_CASE(screen_geometry_rejects_malformed_or_unrepresentable_results) {
+    CHECK_TRUE(!detail::parse_xrandr("DP-1 connected 10x20+5+6junk\nDP-2 connected (normal)\n"));
+    CHECK_TRUE(!detail::parse_xrandr("DP-1 connected 1920x1080+2147483647+0\n"));
+    CHECK_TRUE(!detail::parse_xrandr("DP-1 connected 100x100-2147483648+0\nDP-2 connected 100x100+0+0\n"));
+    CHECK_TRUE(!detail::parse_wlr_randr("  0x1080 px\n  2147483648x1080 px\n"));
+    CHECK_TRUE(!detail::parse_xdpyinfo("  dimensions: 1920x0 pixels\n"));
 }
 
 TEST_CASE(split_shell_words_matches_shlex) {
@@ -299,6 +353,117 @@ loom "functions" {
     CHECK_EQ(runtime.variables().at("value").to_string(), std::string("42"));
     CHECK_EQ(runtime.variables().at("loud").to_string(), std::string("HEY"));
     CHECK_EQ(runtime.variables().at("after").to_string(), std::string("5"));
+}
+
+TEST_CASE(single_return_keeps_ready_order_and_wait_still_yields) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "return order" {
+    func direct(x) {
+        return x + event_key
+    }
+    func delayed(x) {
+        wait 0ms
+        return x
+    }
+    when key A goes down {
+        type direct("first ")
+        type delayed("last")
+    }
+    when key B goes down {
+        type "other"
+    }
+}
+)LOOMWRIGHT");
+    Runtime runtime(script);
+    auto backend = std::make_unique<RecordingBackend>();
+    auto* recorder = backend.get();
+    runtime.set_backend(std::move(backend));
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0), "A", "down"));
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(1), "B", "down"));
+    runtime.scheduler().run();
+    CHECK_EQ(recorder->log, std::vector<std::string>({"type first A", "type other", "type last"}));
+}
+
+TEST_CASE(single_return_reports_expression_errors) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "return error" {
+    func fail(x) {
+        return x % 0
+    }
+    when app starts {
+        set result = fail(10)
+    }
+}
+)LOOMWRIGHT");
+    Runtime runtime(script);
+    runtime.set_backend(std::make_unique<RecordingBackend>());
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
+    runtime.scheduler().run();
+    CHECK_TRUE(runtime.runtime_error().contains("Division by zero"));
+    CHECK_TRUE(runtime.scheduler().stop_requested());
+    CHECK_TRUE(!runtime.variables().contains("result"));
+}
+
+TEST_CASE(cancelling_a_waiting_function_does_not_run_its_return) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "cancel return" {
+    func delayed(x) {
+        wait 1s
+        return x
+    }
+    when app starts {
+        set result = delayed("unreachable")
+    }
+}
+)LOOMWRIGHT");
+    Runtime runtime(script);
+    runtime.set_backend(std::make_unique<RecordingBackend>());
+    auto task = runtime.run_event(script.events.at(0));
+    runtime.scheduler().spawn(task);
+    runtime.scheduler().run_ready();
+    CHECK_TRUE(runtime.scheduler().is_live(task.handle));
+    runtime.scheduler().cancel(task.handle);
+    runtime.scheduler().run_ready();
+    CHECK_EQ(runtime.scheduler().live_count(), std::size_t{0});
+    CHECK_TRUE(!runtime.variables().contains("result"));
+    CHECK_TRUE(runtime.runtime_error().empty());
+}
+
+TEST_CASE(backend_stop_inside_a_function_skips_its_return) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "backend stop" {
+    func direct(x) {
+        return x * 2
+    }
+    func stop() {
+        type "stop"
+        return unknown
+    }
+    when app starts {
+        set first = direct(21)
+        set stopped = stop()
+        type "unreachable"
+    }
+}
+)LOOMWRIGHT");
+    struct StopBackend : RecordingBackend {
+        explicit StopBackend(Scheduler& owner) : scheduler(owner) {}
+        void type_text(const std::string& text) override {
+            RecordingBackend::type_text(text);
+            scheduler.request_stop();
+        }
+        Scheduler& scheduler;
+    };
+    Runtime runtime(script);
+    auto backend = std::make_unique<StopBackend>(runtime.scheduler());
+    auto* recorder = backend.get();
+    runtime.set_backend(std::move(backend));
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
+    runtime.scheduler().run();
+    CHECK_EQ(runtime.variables().at("first").as_int(), 42);
+    CHECK_TRUE(runtime.variables().at("stopped").is_none());
+    CHECK_TRUE(runtime.runtime_error().empty());
+    CHECK_EQ(recorder->log, std::vector<std::string>({"type stop"}));
 }
 
 TEST_CASE(user_functions_can_call_each_other) {

@@ -20,7 +20,7 @@ SCRIPT=${LOOMWRIGHT_GUI_SCRIPT:-$ROOT/examples/antiafk.loom}
 command -v xdotool >/dev/null || exit 77
 [[ -x $BIN && -x $EVENT && -x $LIFETIME && -x $XCB_PROBE && -x $STARTUP_PROBE ]] || exit 77
 DIR=$(mktemp -d "${TMPDIR:-/tmp}/loomwright-gui.XXXXXXXX")
-server= app= probe= startup_probe= map_probe=
+server= app= probe= startup_probe= map_probe= layout_server=
 cleanup() {
     local status=$?
     if [[ $status -ne 0 && $status -ne 77 ]]; then
@@ -29,17 +29,20 @@ cleanup() {
     [[ -z $app ]] || kill "$app" 2>/dev/null || true
     [[ -z $probe ]] || kill "$probe" 2>/dev/null || true
     [[ -z $map_probe ]] || kill "$map_probe" 2>/dev/null || true
+    [[ -z $layout_server ]] || kill "$layout_server" 2>/dev/null || true
     [[ -z $startup_probe ]] || kill "$startup_probe" 2>/dev/null || true
     [[ -z $server ]] || kill -CONT "$server" 2>/dev/null || true
     [[ -z $server ]] || kill "$server" 2>/dev/null || true
     [[ -z $app ]] || wait "$app" 2>/dev/null || true
     [[ -z $probe ]] || wait "$probe" 2>/dev/null || true
     [[ -z $map_probe ]] || wait "$map_probe" 2>/dev/null || true
+    [[ -z $layout_server ]] || wait "$layout_server" 2>/dev/null || true
     [[ -z $startup_probe ]] || wait "$startup_probe" 2>/dev/null || true
     [[ -z $server ]] || wait "$server" 2>/dev/null || true
     rm -f "$DIR/out" "$DIR/err" "$DIR/rects" "$DIR/external.loom" "$DIR/disconnect.loom" \
           "$DIR/xcb-control" "$DIR/xcb-out" "$DIR/xcb-err" \
-          "$DIR/startup-control" "$DIR/startup-out" "$DIR/startup-err"
+          "$DIR/startup-control" "$DIR/startup-out" "$DIR/startup-err" \
+          "$DIR/map-control" "$DIR/map-out" "$DIR/map-rects"
     rmdir "$DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -74,7 +77,7 @@ if command -v setxkbmap >/dev/null && command -v Xvfb >/dev/null; then
     for number in $(seq 200 229); do
         [[ ! -e /tmp/.X11-unix/X$number ]] || continue
         layout_d=:$number
-        Xvfb "$layout_d" -screen 0 1024x768x24 >/dev/null 2>&1 & layout_server=$!
+        Xvfb "$layout_d" -noreset -screen 0 1024x768x24 >/dev/null 2>&1 & layout_server=$!
         for _ in $(seq 1 50); do
             DISPLAY=$layout_d xdotool getmouselocation >/dev/null 2>&1 && break
             sleep 0.1
@@ -91,15 +94,41 @@ if command -v setxkbmap >/dev/null && command -v Xvfb >/dev/null; then
         # Runtime MappingNotify probe: change layout while GUI event loop runs.
         if [[ -x $MAPPING_PROBE ]]; then
             DISPLAY=$layout_d setxkbmap us >/dev/null 2>&1 || true
-            DISPLAY=$layout_d "$MAPPING_PROBE" & map_probe=$!
-            sleep 0.4
-            DISPLAY=$layout_d setxkbmap fr >/dev/null 2>&1 || DISPLAY=$layout_d setxkbmap de >/dev/null 2>&1 || true
-            sleep 0.4
-            DISPLAY=$layout_d setxkbmap us >/dev/null 2>&1 || true
+            mkfifo "$DIR/map-control" "$DIR/map-out"
+            exec {map_in}<>"$DIR/map-control" {map_out}<>"$DIR/map-out"
+            DISPLAY=$layout_d LOOMWRIGHT_GUI_DEBUG_RECTS="$DIR/map-rects" \
+                "$MAPPING_PROBE" <&"$map_in" >&"$map_out" & map_probe=$!
+            IFS= read -r -t 10 -u "$map_out" result
+            [[ $result == ready ]]
+            map_window=$(DISPLAY=$layout_d xdotool search --name '^Mapping probe$' | head -1)
+            read -r _ _ x y w h < <(grep '^input text ' "$DIR/map-rects")
+            DISPLAY=$layout_d "$EVENT" "$map_window" button 1 "$((x+w/2))" "$((y+h/2))"
+            # The physical key for A moves between us/fr; for Z it moves
+            # between us/de. A stale cached map would produce the wrong text.
+            if DISPLAY=$layout_d setxkbmap fr >/dev/null 2>&1; then
+                map_key=a
+            else
+                DISPLAY=$layout_d setxkbmap de >/dev/null 2>&1
+                map_key=z
+            fi
+            DISPLAY=$layout_d "$EVENT" "$map_window" key "$map_key"
+            printf '%s' "$map_key" >&"$map_in"
+            IFS= read -r -t 10 -u "$map_out" result
+            [[ $result == 'change 1' ]]
+            DISPLAY=$layout_d setxkbmap us >/dev/null 2>&1
+            DISPLAY=$layout_d "$EVENT" "$map_window" key "$map_key"
+            printf '%s' "$map_key" >&"$map_in"
+            IFS= read -r -t 10 -u "$map_out" result
+            [[ $result == 'change 2' ]]
+            IFS= read -r -t 10 -u "$map_out" result
+            [[ $result == 'ok   GUI survives runtime MappingNotify/layout changes' ]]
             wait "$map_probe"
+            map_probe=
+            exec {map_in}>&- {map_out}>&-
             echo 'ok   GUI handles runtime MappingNotify/layout changes under Xvfb'
         fi
         kill "$layout_server" 2>/dev/null || true; wait "$layout_server" 2>/dev/null || true
+        layout_server=
         echo 'ok   GUI lifetime probe passes under alternate Xvfb keyboard layouts (us/fr/de)'
     fi
 fi

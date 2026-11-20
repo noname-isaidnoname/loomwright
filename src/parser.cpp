@@ -628,13 +628,12 @@ private:
         return false;
     }
 
-    /// True when one of the arguments may wait. A call to a user-defined
-    /// function may wait, so the evaluator needs a coroutine for it.
-    static bool args_may_wait(const std::vector<ExprPtr>& args) {
-        for (const auto& argument : args) {
-            if (argument->may_wait) return true;
+    /// Merge suspension and call-free information from the argument trees.
+    static void propagate_argument_flags(Expr& expr) {
+        for (const auto& argument : expr.args) {
+            expr.may_wait |= argument->may_wait;
+            expr.call_free &= argument->call_free;
         }
-        return false;
     }
 
     ExprPtr parse_expr(int min_precedence = 0) {
@@ -658,6 +657,7 @@ private:
             } else if (accept("(")) {
                 left = std::make_shared<Expr>();
                 left->kind = Expr::Kind::Call;
+                left->call_free = false;
                 left->name = ident;
                 left->line = token.line;
                 // A built-in function never waits; a user-defined function may.
@@ -678,6 +678,8 @@ private:
                 left = std::make_shared<Expr>();
                 left->kind = Expr::Kind::Variable;
                 left->name = ident;
+                if (ident == "event_key") left->event_variable = Expr::EventVariable::Key;
+                else if (ident == "event_edge") left->event_variable = Expr::EventVariable::Edge;
                 left->line = token.line;
             }
         } else if (token.value.type == Value::Type::Str &&
@@ -691,7 +693,7 @@ private:
                              : token.value.text == "+" ? UnaryOp::Plus
                                                       : UnaryOp::Not;
             left->args.push_back(parse_expr(6));
-            left->may_wait = args_may_wait(left->args);
+            propagate_argument_flags(*left);
         } else if (token.value.type == Value::Type::Str && token.value.text == "(") {
             left = parse_expr();
             expect(")");
@@ -706,7 +708,7 @@ private:
                     expect(",");
                 }
             }
-            left->may_wait = args_may_wait(left->args);
+            propagate_argument_flags(*left);
         } else {
             raise_at("Expected an expression", token);
         }
@@ -721,7 +723,7 @@ private:
             node->line = index->line;
             node->args.push_back(left);
             node->args.push_back(index);
-            node->may_wait = args_may_wait(node->args);
+            propagate_argument_flags(*node);
             left = node;
         }
 
@@ -738,7 +740,7 @@ private:
             node->line = current().line;
             node->args.push_back(left);
             node->args.push_back(parse_expr(info.precedence + 1));
-            node->may_wait = args_may_wait(node->args);
+            propagate_argument_flags(*node);
             left = node;
         }
         return left;

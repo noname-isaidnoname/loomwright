@@ -66,6 +66,18 @@ Exit code 77 means "skipped" (missing X server, xdotool, screenshot tool,
 The picker variants use disjoint display ranges but share screenshot tools.
 They, the X11 GUI test and the Wayland test share the `graphical_integration`
 resource lock to avoid compositor startup starvation on small CI runners.
+The X11 keyboard mapping probe synchronizes with the test driver and
+acknowledges each layout switch only after its focused input decodes the test
+key under the new layout. It does not depend on fixed settle delays.
+The picker lifecycle probe uses a second XCB connection to grab its private
+server, submits and flushes a pointer query from the picker connection, then
+signals the driver to kill the server. The pending reply cannot arrive while
+the server is grabbed. The driver checks that the live child owns the
+display lock before enabling the grab, and checks the child's signal exit
+status before removing its dead server files. On Xvfb, the first left-click
+case still exercises normal screenshot-tool discovery, and the remaining
+cases can use real X11 capture tools without retrying desktop-session tools
+on each invocation.
 
 ## Sanitizers
 
