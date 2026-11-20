@@ -90,8 +90,11 @@ allocator and libc's own checks add nothing.
 
 `LOOMWRIGHT_LTO` only applies to a release build, and only when the linker can
 read the bitcode: GCC's driver loads its own plugin, while Clang needs `mold`
-or `lld`. When neither is available the configure step says that link-time
-optimization is disabled and the build works without it.
+or `lld`. When Clang's versioned `ld.lld-N` is installed (for example
+`lld-19` for Clang 19), CMake prefers it over an unversioned `ld.lld`, because
+a linker from a different LLVM release cannot read the bitcode. When neither
+is available the configure step says that link-time optimization is disabled
+and the build works without it.
 For Clang, CMake probes whether the selected linker and plugin can cache
 ThinLTO backend objects. When supported the cache lives in `thinlto-cache/`
 under the build directory and is safe to delete between builds. It does not
