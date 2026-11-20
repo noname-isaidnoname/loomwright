@@ -98,7 +98,7 @@ void check_uinput_step_failure(const char* target, bool use_relative = false, bo
         CHECK_TRUE(false);
     } catch (const BackendError& error) {
         CHECK_EQ(seen, std::string(target));
-        CHECK_TRUE(std::string(error.what()).find(target) != std::string::npos);
+        CHECK_TRUE(std::string(error.what()).contains(target));
     }
     errno = 0;
     CHECK_EQ(::fcntl(adopted, F_GETFD), -1);

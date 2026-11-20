@@ -10,7 +10,7 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <description>
-    <p>Loomwright is a Linux-first desktop automation language and native C++20
+    <p>Loomwright is a Linux-first desktop automation language and native C++23
     runtime. Scripts use readable .loom syntax, are statically checked before
     running, and execute on a single event loop.</p>
   </description>

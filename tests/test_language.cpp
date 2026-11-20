@@ -32,7 +32,7 @@ bool has_error(const std::vector<Diagnostic>& diagnostics) {
 
 bool has_message_containing(const std::vector<Diagnostic>& diagnostics, const std::string& needle) {
     for (const auto& diagnostic : diagnostics) {
-        if (diagnostic.message.find(needle) != std::string::npos) return true;
+        if (diagnostic.message.contains(needle)) return true;
     }
     return false;
 }
@@ -415,8 +415,8 @@ TEST_CASE(lexer_reports_unexpected_characters_with_a_position) {
         CHECK_TRUE(false);
     } catch (const LexError& error) {
         const std::string message = error.what();
-        CHECK_TRUE(message.find("Unexpected character \"@\"") != std::string::npos);
-        CHECK_TRUE(message.find("at 2:18") != std::string::npos);
+        CHECK_TRUE(message.contains("Unexpected character \"@\""));
+        CHECK_TRUE(message.contains("at 2:18"));
     }
 }
 

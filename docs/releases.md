@@ -8,7 +8,7 @@ Set `LOOMWRIGHT_PACKAGE_OUT` to override either script's output directory.
 For `package.sh`, `LOOMWRIGHT_PACKAGE_BUILD` and `JOBS` override its build
 directory and parallelism. The build directory must be writable.
 Use a clean checkout: `source` archives **HEAD**, not uncommitted changes, while
-binary packages build the working tree. Install CMake, Ninja, a C++20 compiler,
+binary packages build the working tree. Install CMake, Ninja, a C++23 compiler (Clang 19+ or GCC 13+),
 pkg-config and the X11/XCB/libpng headers; install GTK3/wayland-client headers to
 include native Wayland panels. DEB requires dpkg tools and `file`; RPM requires
 rpmbuild; AppImage requires `appimagetool`, `file`, `mksquashfs` (squashfs-tools) and

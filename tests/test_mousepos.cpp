@@ -118,7 +118,7 @@ TEST_CASE(capture_desktop_reports_missing_tools) {
         (void)capture_desktop(finder);
         CHECK_TRUE(false);  // unreachable: capture_desktop must throw
     } catch (const PickerError& error) {
-        CHECK_TRUE(std::string(error.what()).find("screenshot tool") != std::string::npos);
+        CHECK_TRUE(std::string(error.what()).contains("screenshot tool"));
     }
 }
 
@@ -139,7 +139,7 @@ TEST_CASE(cli_cancel_returns_130) {
         });
     });
     CHECK_EQ(captured.code, 130);
-    CHECK_TRUE(captured.err.find("cancelled") != std::string::npos);
+    CHECK_TRUE(captured.err.contains("cancelled"));
 }
 
 TEST_CASE(cli_reports_picker_startup_errors) {
@@ -149,5 +149,5 @@ TEST_CASE(cli_reports_picker_startup_errors) {
         });
     });
     CHECK_EQ(captured.code, 2);
-    CHECK_TRUE(captured.err.find("no display") != std::string::npos);
+    CHECK_TRUE(captured.err.contains("no display"));
 }

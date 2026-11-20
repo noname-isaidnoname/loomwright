@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(loomwright
-    VERSION 0.5.7
+    VERSION 0.6.0
     DESCRIPTION "A Linux-first desktop automation language and runtime"
     LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -20,21 +20,49 @@ option(LOOMWRIGHT_REQUIRE_REFERENCE_COMPILER
     "Fail the configure step unless the reference compiler (${LOOMWRIGHT_REFERENCE_COMPILER}) is used" OFF)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19)
         message(FATAL_ERROR
-            "Clang 16 or newer is required (found ${CMAKE_CXX_COMPILER_VERSION}). "
-            "C++20 support in older releases is incomplete.")
+            "Clang 19 or newer is required (found ${CMAKE_CXX_COMPILER_VERSION}). "
+            "C++23 support in older releases is incomplete.")
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
         message(FATAL_ERROR
             "GCC 13 or newer is required (found ${CMAKE_CXX_COMPILER_VERSION}). "
-            "C++20 support in older releases is incomplete.")
+            "C++23 support in older releases is incomplete.")
     endif()
 else()
     message(FATAL_ERROR
         "Unsupported C++ compiler '${CMAKE_CXX_COMPILER_ID}'. "
         "Use Clang ${LOOMWRIGHT_REFERENCE_COMPILER} or GCC.")
+endif()
+
+# The version gates pick the compiler, but a Clang build compiles against
+# whichever standard library it was installed with, and that library is what
+# provides std::expected and std::string::contains. Probe the features the
+# runtime actually uses instead of assuming the library tracks the compiler.
+include(CheckCXXSourceCompiles)
+# check_cxx_source_compiles does not inherit CMAKE_CXX_STANDARD, so pass the
+# same flag the targets use. CMake knows each compiler's spelling of C++23.
+set(CMAKE_REQUIRED_FLAGS "${CMAKE_CXX23_STANDARD_COMPILE_OPTION}")
+check_cxx_source_compiles([=[
+#include <expected>
+#include <string>
+
+bool has_char(const std::string& text) { return text.contains('d'); }
+constexpr auto increment = [](int value) static { return value + 1; };
+static_assert(increment(1) == 2, "the static call operator is a C++23 feature");
+std::expected<void, int> fallible() { return std::unexpected(3); }
+int main() { return 0; }
+]=] LOOMWRIGHT_HAS_CXX23)
+unset(CMAKE_REQUIRED_FLAGS)
+if(NOT LOOMWRIGHT_HAS_CXX23)
+    message(FATAL_ERROR
+        "The C++23 standard library is required (std::string::contains, "
+        "std::expected and the static call operator) but "
+        "'${CMAKE_CXX_COMPILER} ${CMAKE_CXX_COMPILER_VERSION}' does not provide "
+        "it. Use GCC 13 or newer, or Clang 19 or newer with libstdc++ 13+ or "
+        "libc++ 17+.")
 endif()
 
 if(LOOMWRIGHT_REQUIRE_REFERENCE_COMPILER AND

@@ -5,7 +5,7 @@ For release downloads, packaging scripts, and container-based verification see
 
 ## Prerequisites
 
-- C++20 toolchain: Clang 16 or newer (the reference compiler) or GCC 13 or newer
+- C++23 toolchain: Clang 19 or newer (the reference compiler) or GCC 13 or newer, with libstdc++ 13+ or libc++ 17+
 - CMake ≥ 3.25
 - Ninja
 - pkg-config
@@ -97,9 +97,14 @@ optimization is disabled and the build works without it.
 
 Clang is the reference compiler: the release artifacts are built with it, and
 it produces the fastest runtime build of the two supported toolchains
-([benchmark.md](benchmark.md)). GCC 13 or newer stays supported and is built by
-the CI workflow as well. The configure step rejects a compiler that is too old
-for the C++20 features the runtime uses, and
+([benchmark.md](benchmark.md)). Clang 19 or newer is the C++23 floor: Clang 18
+reports a pre-DR `__cpp_concepts` value with libstdc++ 13, which hides
+`std::expected`. GCC 13 or newer stays supported; both compilers are available
+on Ubuntu 24.04 LTS, the base for CI and the release binaries, and the workflows
+pin `clang-19` for that job. The configure step rejects a compiler
+that is too old for the C++23 features the runtime uses, then probes the
+standard library for `std::string::contains`, `std::expected` and the static
+call operator so an incompatible standard library fails with one clear message.
 `LOOMWRIGHT_REQUIRE_REFERENCE_COMPILER=ON` makes it reject everything but Clang.
 
 To build with a specific compiler, use the matching preset or set the usual

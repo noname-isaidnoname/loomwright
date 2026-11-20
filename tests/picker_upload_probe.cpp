@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
         });
         if (result || disconnect) return 1;
     } catch (const loomwright::PickerError& error) {
-        error_seen = std::string(error.what()).find("X11 connection closed") != std::string::npos;
+        error_seen = std::string(error.what()).contains("X11 connection closed");
         if (!disconnect || !error_seen) {
             std::fprintf(stderr, "%s\n", error.what());
             return 1;

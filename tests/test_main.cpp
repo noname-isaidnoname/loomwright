@@ -19,7 +19,7 @@ int run_all(const std::string& filter) {
     int failures = 0;
     size_t executed = 0;
     for (const auto& test : registry()) {
-        if (!filter.empty() && test.name.find(filter) == std::string::npos) continue;
+        if (!filter.empty() && !test.name.contains(filter)) continue;
         ++executed;
         try {
             test.function();

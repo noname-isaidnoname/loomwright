@@ -1,6 +1,6 @@
 # Benchmark
 
-Measured build and test performance for Loomwright 0.5.7 on the maintainer's
+Measured build and test performance for Loomwright 0.6.0 on the maintainer's
 machine (CachyOS, KDE Plasma, 4 jobs). Numbers are a snapshot, not a promise:
 always measure before and after a change and keep the evidence with the commit.
 If one of your changes shows no gain or causes a regression, consider trying a different approach; otherwise reject it and move on.
@@ -148,6 +148,37 @@ O(n) scans over queues that grow with the number of parked frames) but
 measures at parity on these workloads, where queues stay short; it is kept
 for dispatch-heavy scripts, not for the numbers above. All 157 unit tests
 pass.
+
+## C++23 pass (0.6.0)
+
+The build now uses `-std=c++23`, and the runtime adopts the C++23 vocabulary
+where it removes ceremony: `contains()` replaces `find(...) != npos`,
+`spawn_detached` returns `std::expected<void, std::string>` instead of writing
+into an error out-parameter, stateless lambdas passed to algorithms get a
+`static` call operator, and the builtin table's size check uses
+`std::to_underlying`. Configure probes those features once, so a compiler with
+an old standard library fails with one clear message rather than a wall of
+template diagnostics.
+
+Measured as an interleaved A/B/A/B comparison: a pristine HEAD worktree
+(C++20) and the ported tree (C++23) were each built with the same release
+preset, then run alternately on one pinned core, 20 repetitions × 7 trials per
+run. Each row is the best time of two runs per tree; medians stayed within
+1 ms of the best times.
+
+| Compiler | Workload | C++20 best (2 runs) | C++23 best (2 runs) | Change |
+| --- | --- | --- | --- | --- |
+| GCC 16.2.1 | arith | 30.98 / 30.88 ms | 28.96 / 28.68 ms | ~7 % faster |
+| GCC 16.2.1 | await | 105.98 / 105.70 ms | 111.08 / 110.89 ms | ~5 % slower |
+| Clang 23.1.5 | arith | 24.78 / 23.84 ms | 23.61 / 23.62 ms | within noise |
+| Clang 23.1.5 | await | 161.16 / 160.85 ms | 161.11 / 160.78 ms | parity |
+
+Allocation counts (29 972 per `arith` run, 171 109.9 per `await` run) and both
+checksums are identical across all eight runs. The source changes are API and
+readability changes, not algorithm changes; GCC's small shifts come from code
+generation in the new standard mode. The point of the pass is a smaller API
+surface and less search noise in the source, not throughput. All 157 unit
+tests and the full CTest suite pass on both compilers.
 
 ## Results at 0.4.0
 

@@ -1,6 +1,6 @@
 # Loomwright
 
-Loomwright is a Linux-first desktop automation language and native C++20 runtime. Scripts use readable `.loom` syntax, are statically checked before running, and execute on a single epoll-based event loop. The language never evaluates code or shell strings.
+Loomwright is a Linux-first desktop automation language and native C++23 runtime. Scripts use readable `.loom` syntax, are statically checked before running, and execute on a single epoll-based event loop. The language never evaluates code or shell strings.
 
 - **Input:** physical keyboards (and optional mouse buttons) via evdev ioctls on `/dev/input/event*`
 - **Output:** `ydotool`/`ydotoold` (preferred for keys/buttons/text) plus a direct `uinput` device for absolute pointer motion, scroll, and fallback output
@@ -49,7 +49,7 @@ The AppImage carries the icon, desktop entry and metainfo inside the image.
 
 ### Build from source
 
-You need a C++20 compiler, CMake ≥ 3.25, Ninja, pkg-config, and X11/XCB/libpng development headers. GTK3 and Wayland development headers enable native Wayland panels; without them, panels use X11/Xwayland.
+You need a C++23 compiler (Clang 19+ or GCC 13+), CMake ≥ 3.25, Ninja, pkg-config, and X11/XCB/libpng development headers. GTK3 and Wayland development headers enable native Wayland panels; without them, panels use X11/Xwayland.
 
 Clang is the reference compiler: the release artifacts are built with Clang 16 or newer, and it produces the fastest runtime build (see [docs/benchmark.md](docs/benchmark.md)). GCC 13 or newer is supported as well, and the CI workflow builds and tests with both.
 

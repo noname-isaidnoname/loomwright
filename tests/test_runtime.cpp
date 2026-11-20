@@ -541,7 +541,7 @@ loom "startup-failure" {
     } catch (const std::exception& error) {
         message = error.what();
     }
-    CHECK_TRUE(message.find("requires an accessible X11") != std::string::npos);
+    CHECK_TRUE(message.contains("requires an accessible X11"));
 }
 
 TEST_CASE(cancellation_during_cleanup_still_drains_before_closing_backend) {
@@ -731,7 +731,7 @@ TEST_CASE(evdev_overflow_snapshot_failure_stops_runtime) {
     Runtime runtime(parse("loom \"overflow\" { when app starts { log \"ready\" } }"));
     runtime.process_events({{EV_SYN, SYN_DROPPED, 0}, {EV_SYN, SYN_REPORT, 0}}, nullptr, "keyboard");
     CHECK_TRUE(runtime.scheduler().stop_requested());
-    CHECK_TRUE(runtime.runtime_error().find("resynchronization failed") != std::string::npos);
+    CHECK_TRUE(runtime.runtime_error().contains("resynchronization failed"));
 }
 
 TEST_CASE(evdev_overflow_ignores_stale_events_already_in_read_batch) {
@@ -784,7 +784,7 @@ loom "remap-only" {
     std::string message;
     try { std::rethrow_exception(runtime.failure()); }
     catch (const std::exception& error) { message = error.what(); }
-    CHECK_TRUE(message.find("No accessible keyboard devices") != std::string::npos);
+    CHECK_TRUE(message.contains("No accessible keyboard devices"));
 }
 
 TEST_CASE(remap_source_is_script_wide_consumed) {
@@ -1008,8 +1008,8 @@ TEST_CASE(split_grab_handoff_aborts_and_identifies_the_possible_stuck_key) {
     CHECK_EQ(drains, 2);
     CHECK_TRUE(!grabbed);
     CHECK_TRUE(desktop_thinks_down);
-    CHECK_TRUE(error_message.find("release of A") != std::string::npos);
-    CHECK_TRUE(error_message.find("physically tap and release") != std::string::npos);
+    CHECK_TRUE(error_message.contains("release of A"));
+    CHECK_TRUE(error_message.contains("physically tap and release"));
 }
 
 TEST_CASE(handoff_queue_drain_preserves_releases_and_overflow) {
@@ -1084,7 +1084,7 @@ loom "chord-rollback" {
     runtime.physical_key("fake-keyboard", "F8", true);
     runtime.scheduler().run();
 
-    CHECK_TRUE(runtime.runtime_error().find("injected key press failure") != std::string::npos);
+    CHECK_TRUE(runtime.runtime_error().contains("injected key press failure"));
     CHECK_EQ(raw->log, std::vector<std::string>({"key LEFTCTRL down", "key LEFTCTRL up"}));
 }
 

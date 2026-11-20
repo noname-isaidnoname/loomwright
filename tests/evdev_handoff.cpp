@@ -139,8 +139,8 @@ int main() {
         }
         const auto name = normalize_key_event(kTestCode);
         const std::string label = name ? *name : "code " + std::to_string(kTestCode);
-        if (!observer_saw_down || error.find("release of " + label) == std::string::npos ||
-            error.find("physically tap and release") == std::string::npos || safety.target_grabbed) {
+        if (!observer_saw_down || !error.contains("release of " + label) ||
+            !error.contains("physically tap and release") || safety.target_grabbed) {
             std::cerr << "handoff detection or rollback failed: " << error << '\n';
             return 1;
         }

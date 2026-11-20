@@ -43,9 +43,8 @@ std::vector<std::unique_ptr<InputDevice>> Runtime::open_input_devices(bool inclu
         const std::string name = lower_ascii(device->name());
         // Never react to our own injected devices, or to the evdev proxies
         // other remappers create when two tools run at once.
-        if (name.find("loomwright") != std::string::npos || name.find("ydotool") != std::string::npos ||
-            name.find("virtual pointer") != std::string::npos ||
-            name.find("remap_clicks") != std::string::npos) {
+        if (name.contains("loomwright") || name.contains("ydotool") || name.contains("virtual pointer") ||
+            name.contains("remap_clicks")) {
             continue;
         }
         const bool keyboard = device->is_keyboard();

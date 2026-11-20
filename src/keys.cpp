@@ -35,7 +35,7 @@ const KeyEntry* find_key_entry(const std::string& name) {
     // comparison works on views: building a string for every comparison would
     // allocate once per step.
     const auto* found = std::lower_bound(begin, end, name,
-                                         [](const KeyEntry& entry, const std::string& needle) {
+                                         [](const KeyEntry& entry, const std::string& needle) static {
                                              return std::string_view(entry.name) < std::string_view(needle);
                                          });
     if (found == end || name != found->name) return nullptr;
@@ -70,7 +70,7 @@ static_assert(key_aliases_sorted(), "the alias table must stay sorted by name");
 
 std::string_view find_alias(std::string_view upper) {
     const auto* found = std::lower_bound(kKeyAliases.begin(), kKeyAliases.end(), upper,
-                                         [](const KeyAlias& entry, std::string_view needle) {
+                                         [](const KeyAlias& entry, std::string_view needle) static {
                                              return entry.name < needle;
                                          });
     if (found == kKeyAliases.end() || found->name != upper) return {};
@@ -84,7 +84,7 @@ constexpr std::array<std::pair<std::string_view, int>, 5> kMouseButtons = {{
 const std::pair<std::string_view, int>* find_mouse_button(std::string_view name) {
     const auto* found = std::lower_bound(kMouseButtons.begin(), kMouseButtons.end(), name,
                                          [](const std::pair<std::string_view, int>& entry,
-                                            std::string_view needle) { return entry.first < needle; });
+                                            std::string_view needle) static { return entry.first < needle; });
     if (found == kMouseButtons.end() || found->first != name) return nullptr;
     return found;
 }
@@ -155,7 +155,7 @@ std::string validate_key_name(const std::string& name) {
     if (!valid && canonical.size() >= 2 && canonical[0] == 'F') {
         const std::string digits = canonical.substr(1);
         if (std::all_of(digits.begin(), digits.end(),
-                        [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
+                        [](char c) static { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
             const long number = std::stol(digits);
             valid = number >= 1 && number <= 24;
         }
@@ -183,7 +183,7 @@ const char* key_name_for_code(int code) {
     const auto* begin = std::begin(kKeyReverse);
     const auto* end = std::end(kKeyReverse);
     const auto* found = std::lower_bound(begin, end, probe,
-                                         [](const ReverseKeyEntry& entry, const ReverseKeyEntry& needle) {
+                                         [](const ReverseKeyEntry& entry, const ReverseKeyEntry& needle) static {
                                              return entry.code < needle.code;
                                          });
     if (found == end || found->code != code) return nullptr;

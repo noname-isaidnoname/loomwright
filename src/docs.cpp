@@ -379,7 +379,7 @@ are registered in Runtime::eval(). This keeps integrations isolated from parsing
 Performance notes
 -----------------
 
-The C++20 runtime drives every device, timer and dispatch from one epoll-based
+The C++23 runtime drives every device, timer and dispatch from one epoll-based
 event loop, so a key press never waits for an interpreter or a thread hand-off.
 uinput events are batched into one write per report instead of one syscall per
 event, and pointer, button and key output goes straight to /dev/uinput instead

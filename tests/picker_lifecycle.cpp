@@ -30,7 +30,7 @@ int main() {
     try {
         if (loomwright::pick_mouse_position()) return 1;
     } catch (const loomwright::PickerError& error) {
-        if (!expect_disconnect || std::string(error.what()).find("X11 connection closed") == std::string::npos) {
+        if (!expect_disconnect || !std::string(error.what()).contains("X11 connection closed")) {
             std::fprintf(stderr, "%s\n", error.what());
             return 1;
         }

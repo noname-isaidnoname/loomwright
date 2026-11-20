@@ -12,8 +12,8 @@
 
 pkgname=loomwright
 # Keep this in sync with project(loomwright VERSION ...) in ../../CMakeLists.txt.
-pkgver=0.5.7
-pkgrel=2
+pkgver=0.6.0
+pkgrel=1
 pkgdesc='Linux-first desktop automation language and runtime'
 arch=(x86_64 aarch64)
 license=(MIT)

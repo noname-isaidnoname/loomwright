@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <string_view>
+#include <utility>
 
 namespace loomwright {
 namespace {
@@ -71,7 +72,7 @@ constexpr bool builtins_sorted() {
 }
 
 static_assert(builtins_sorted(), "the builtin table must stay sorted by name");
-static_assert(kBuiltins.size() == static_cast<size_t>(Builtin::GuiSetVisible),
+static_assert(kBuiltins.size() == static_cast<size_t>(std::to_underlying(Builtin::GuiSetVisible)),
               "every Builtin enumerator except None has a table row");
 
 constexpr bool builtin_ids_unique() {
@@ -92,7 +93,7 @@ std::span<const BuiltinInfo> builtin_functions() { return kBuiltins; }
 
 const BuiltinInfo* find_builtin_function(std::string_view name) {
     const auto* found = std::lower_bound(kBuiltins.begin(), kBuiltins.end(), name,
-                                         [](const BuiltinInfo& entry, std::string_view needle) {
+                                         [](const BuiltinInfo& entry, std::string_view needle) static {
                                              return entry.name < needle;
                                          });
     if (found == kBuiltins.end() || found->name != name) return nullptr;

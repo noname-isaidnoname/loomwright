@@ -320,7 +320,7 @@ std::string hotkey_id_for_name(const std::string& raw_name) {
     const std::string lower = lower_ascii(name);
     if (lower.starts_with("mouse:")) return canonical_mouse_event_key(name.substr(6));
     if (lower.starts_with("mouse_")) return canonical_mouse_event_key(name);
-    if (name.find('+') != std::string::npos) {
+    if (name.contains('+')) {
         std::string id;
         size_t start = 0;
         while (true) {
@@ -363,7 +363,7 @@ std::pair<int, int> detect_screen_size() {
             std::string line;
             std::istringstream stream(result.out);
             while (std::getline(stream, line)) {
-                if (line.find(" px") == std::string::npos) continue;
+                if (!line.contains(" px")) continue;
                 std::smatch match;
                 if (std::regex_search(line, match, pattern)) {
                     width = std::max(width, std::stoi(match[1].str()));
@@ -387,7 +387,7 @@ std::pair<int, int> detect_screen_size() {
             std::istringstream stream(result.out);
             std::string line;
             while (std::getline(stream, line)) {
-                if (line.find(" connected") == std::string::npos) continue;
+                if (!line.contains(" connected")) continue;
                 std::smatch match;
                 if (!std::regex_search(line, match, pattern)) continue;
                 const int width = std::stoi(match[1].str());
@@ -683,10 +683,10 @@ Task Runtime::run_body() {
         const auto has_device = [this](const auto& predicate) {
             return std::any_of(devices_.begin(), devices_.end(), predicate);
         };
-        if (has_key_events && !has_device([](const auto& device) { return device->is_keyboard(); })) {
+        if (has_key_events && !has_device([](const auto& device) static { return device->is_keyboard(); })) {
             throw RuntimeErrorLoomwright(input_permission_help());
         }
-        if (has_mouse_events && !has_device([](const auto& device) { return device->is_mouse(); })) {
+        if (has_mouse_events && !has_device([](const auto& device) static { return device->is_mouse(); })) {
             throw RuntimeErrorLoomwright(mouse_permission_help());
         }
 
@@ -1655,7 +1655,7 @@ Value Runtime::call_builtin(Builtin builtin, const std::string& name, std::vecto
             return Value::of_bool(false);
         }
         const std::string& text = require_string(0);
-        return Value::of_bool(text.find(require_string(1)) != std::string::npos);
+        return Value::of_bool(text.contains(require_string(1)));
     }
     case Builtin::Replace: {
         require(3);
@@ -1747,7 +1747,7 @@ Value Runtime::call_builtin(Builtin builtin, const std::string& name, std::vecto
         require(1);
         std::vector<Value>& items = args[0].list_items();
         std::stable_sort(items.begin(), items.end(),
-                         [](const Value& left, const Value& right) { return compare_values(left, right) < 0; });
+                         [](const Value& left, const Value& right) static { return compare_values(left, right) < 0; });
         return args[0];
     }
 

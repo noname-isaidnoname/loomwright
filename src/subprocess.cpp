@@ -67,7 +67,7 @@ bool write_all(int fd, const std::string& text) {
 
 std::string which(const std::string& name) {
     if (name.empty()) return {};
-    if (name.find('/') != std::string::npos) {
+    if (name.contains('/')) {
         return ::access(name.c_str(), X_OK) == 0 ? name : std::string();
     }
     const char* path = std::getenv("PATH");
@@ -219,10 +219,9 @@ CommandResult run_command(const std::vector<std::string>& argv, const std::strin
     return result;
 }
 
-bool spawn_detached(const std::vector<std::string>& argv, std::string& error) {
+std::expected<void, std::string> spawn_detached(const std::vector<std::string>& argv) {
     if (argv.empty()) {
-        error = "empty command";
-        return false;
+        return std::unexpected("empty command");
     }
     std::vector<char*> raw;
     raw.reserve(argv.size() + 1);
@@ -231,23 +230,22 @@ bool spawn_detached(const std::vector<std::string>& argv, std::string& error) {
 
     int status_pipe[2] = {-1, -1};
     if (::pipe2(status_pipe, O_CLOEXEC) != 0 && ::pipe(status_pipe) != 0) {
-        error = std::strerror(errno);
-        return false;
+        return std::unexpected(std::strerror(errno));
     }
     if ((fcntl(status_pipe[0], F_SETFD, FD_CLOEXEC) < 0) ||
         (fcntl(status_pipe[1], F_SETFD, FD_CLOEXEC) < 0)) {
-        error = std::strerror(errno);
+        const std::string message = std::strerror(errno);
         ::close(status_pipe[0]);
         ::close(status_pipe[1]);
-        return false;
+        return std::unexpected(message);
     }
 
     const pid_t child = ::fork();
     if (child < 0) {
-        error = std::strerror(errno);
+        const std::string message = std::strerror(errno);
         ::close(status_pipe[0]);
         ::close(status_pipe[1]);
-        return false;
+        return std::unexpected(message);
     }
     if (child == 0) {
         ::close(status_pipe[0]);
@@ -286,15 +284,14 @@ bool spawn_detached(const std::vector<std::string>& argv, std::string& error) {
     ::close(status_pipe[0]);
 
     if (count == static_cast<ssize_t>(sizeof(exec_error))) {
-        error = std::strerror(exec_error);
-        if (exec_error == ENOENT || exec_error == ENOTDIR) error = "command not found";
-        return false;
+        std::string message = std::strerror(exec_error);
+        if (exec_error == ENOENT || exec_error == ENOTDIR) message = "command not found";
+        return std::unexpected(message);
     }
     if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-        error = "failed to detach process";
-        return false;
+        return std::unexpected("failed to detach process");
     }
-    return true;
+    return {};
 }
 
 std::vector<std::string> split_shell_words(const std::string& text) {

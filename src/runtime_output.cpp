@@ -160,7 +160,7 @@ void Runtime::send_string(const std::string& text) {
                     if (!pending_modifiers.empty()) {
                         throw RuntimeErrorLoomwright("send hold/release tokens cannot be combined with pending ^, !, +, or # modifiers");
                     }
-                    if (first.find('+') != std::string::npos) {
+                    if (first.contains('+')) {
                         throw RuntimeErrorLoomwright("send hold/release tokens accept one key, not a chord");
                     }
                     const std::string name = canonical_key(first);
@@ -185,7 +185,7 @@ void Runtime::send_string(const std::string& text) {
                 const std::string count_text = words.at(1);
                 if (count_text.empty() ||
                     !std::all_of(count_text.begin(), count_text.end(),
-                                 [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
+                                 [](char c) static { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
                     throw RuntimeErrorLoomwright("send token {" + content + "} has a non-numeric repeat count");
                 }
                 repeat = std::stoi(count_text);
@@ -260,8 +260,9 @@ void Runtime::notify_desktop(const std::string& message) {
         say("notification: " + message);
         return;
     }
-    std::string error;
-    spawn_detached({executable, "Loomwright", message}, error);
+    // A notification is cosmetic; a failed spawn falls back to doing nothing,
+    // just as it does when notify-send is not installed.
+    [[maybe_unused]] const auto ignored = spawn_detached({executable, "Loomwright", message});
 }
 
 void Runtime::launch_program(const std::string& command) {
@@ -272,9 +273,9 @@ void Runtime::launch_program(const std::string& command) {
     }
     const std::vector<std::string> argv = split_shell_words(command);
     if (argv.empty()) throw RuntimeErrorLoomwright("launch command cannot be empty");
-    std::string error;
-    if (!spawn_detached(argv, error)) {
-        throw RuntimeErrorLoomwright("could not launch " + quote_string(argv.front()) + ": " + error);
+    const auto started = spawn_detached(argv);
+    if (!started) {
+        throw RuntimeErrorLoomwright("could not launch " + quote_string(argv.front()) + ": " + started.error());
     }
 }
 

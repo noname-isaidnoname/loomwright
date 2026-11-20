@@ -175,7 +175,7 @@ std::map<std::string, std::string> Runtime::active_window_info() const {
                         value.pop_back();
                     }
                     if (!value.empty() &&
-                        std::all_of(value.begin(), value.end(), [](char c) {
+                        std::all_of(value.begin(), value.end(), [](char c) static {
                             return std::isdigit(static_cast<unsigned char>(c)) != 0;
                         })) {
                         info["pid"] = value;
@@ -217,7 +217,7 @@ std::map<std::string, std::string> Runtime::active_window_info() const {
                             value.pop_back();
                         }
                         if (!value.empty() &&
-                            std::all_of(value.begin(), value.end(), [](char c) {
+                            std::all_of(value.begin(), value.end(), [](char c) static {
                                 return std::isdigit(static_cast<unsigned char>(c)) != 0;
                             })) {
                             info["pid"] = value;

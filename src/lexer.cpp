@@ -240,7 +240,7 @@ std::vector<Token> tokenize(const std::string& source) {
         if (matched) continue;
 
         static const std::string kSingleOperators = "{}();,.=+*/%<>!-[]";
-        if (kSingleOperators.find(c) != std::string::npos) {
+        if (kSingleOperators.contains(c)) {
             Token token;
             token.kind = TokenKind::Op;
             token.value = Value::of_str(std::string(1, c));

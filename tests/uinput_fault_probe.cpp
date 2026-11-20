@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
         return 1;
     } catch (const loomwright::BackendError& error) {
         const std::string msg = error.what();
-        if (msg.find(expected) == std::string::npos) {
+        if (!msg.contains(expected)) {
             std::cerr << "error message missing '" << expected << "': " << msg << "\n";
             return 1;
         }

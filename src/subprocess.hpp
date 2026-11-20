@@ -1,5 +1,6 @@
 #pragma once
 
+#include <expected>
 #include <string>
 #include <vector>
 
@@ -23,7 +24,8 @@ CommandResult run_command(const std::vector<std::string>& argv, const std::strin
                           int timeout_ms = 0);
 
 /// Start a program in its own session with stdio redirected, without waiting.
-bool spawn_detached(const std::vector<std::string>& argv, std::string& error);
+/// The unexpected value is the reason the program could not be started.
+std::expected<void, std::string> spawn_detached(const std::vector<std::string>& argv);
 
 /// POSIX-shell-style word splitting: single quotes, double quotes, backslash
 /// escapes and `#` comments, without any shell being involved.

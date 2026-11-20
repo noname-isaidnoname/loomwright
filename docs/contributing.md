@@ -2,8 +2,12 @@
 
 ## Style
 
-- C++20, 4-space indentation, small free functions in anonymous namespaces
+- C++23, 4-space indentation, small free functions in anonymous namespaces
   where possible, RAII ownership (`std::unique_ptr`, no raw `new`).
+- Use the C++23 vocabulary where it fits: `contains()` instead of
+  `find(...) != npos`, `std::expected` instead of a bool plus an error
+  out-parameter, `static` call operators on stateless lambdas passed to
+  algorithms, and `std::to_underlying` for enum-to-integer conversions.
 - Explicit exception types: `ParseError` (`src/parser.hpp`), `BackendError`,
   `RuntimeErrorLoomwright`, `LexError` (`src/errors.hpp`), `CliUsageError`
   (`src/cli.hpp`), `PickerError` (`src/mousepos.hpp`).

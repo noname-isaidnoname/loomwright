@@ -1,6 +1,6 @@
 # Architecture
 
-Loomwright is a Linux-first desktop automation language and its native C++20
+Loomwright is a Linux-first desktop automation language and its native C++23
 runtime. A `.loom` file is parsed, statically checked, and then executed on a
 single epoll-based event loop. There is no interpreter in the hot path: the
 runtime is a set of coroutines (`Task`) driven by one `Scheduler`.

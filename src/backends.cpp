@@ -305,7 +305,7 @@ void UInputBackend::type_text(const std::string& text) {
         std::string key_name;
         if (character.size() == 1) {
             const char c = character[0];
-            upper = kShifted.find(c) != std::string::npos;
+            upper = kShifted.contains(c);
             if (std::isalpha(static_cast<unsigned char>(c)) != 0) {
                 key_name = std::string(1, static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
             } else if (upper) {

@@ -157,15 +157,15 @@ TEST_CASE(run_command_enforces_timeout) {
 
 TEST_CASE(spawn_detached_returns_without_waiting_and_reports_missing_command) {
     const auto start = std::chrono::steady_clock::now();
-    std::string error;
-    CHECK_TRUE(spawn_detached({"/bin/sleep", "2"}, error));
+    const auto started = spawn_detached({"/bin/sleep", "2"});
+    CHECK_TRUE(started.has_value());
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
     CHECK_TRUE(elapsed.count() < 1500);
 
-    std::string missing;
-    CHECK_TRUE(!spawn_detached({"/definitely/not/a/loomwright-command"}, missing));
-    CHECK_TRUE(!missing.empty());
+    const auto missing = spawn_detached({"/definitely/not/a/loomwright-command"});
+    CHECK_TRUE(!missing.has_value());
+    CHECK_TRUE(!missing.error().empty());
 }
 
 TEST_CASE(evaluates_list_and_string_functions) {
@@ -337,7 +337,7 @@ loom "runaway" {
     runtime.set_backend(std::make_unique<RecordingBackend>());
     runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
     runtime.scheduler().run();
-    CHECK_TRUE(runtime.runtime_error().find("Maximum function call depth") != std::string::npos);
+    CHECK_TRUE(runtime.runtime_error().contains("Maximum function call depth"));
 }
 
 TEST_CASE(chord_events_need_their_modifiers) {
