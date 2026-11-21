@@ -37,6 +37,47 @@ Internal docs live in `docs/`; start at [`docs/README.md`](docs/README.md) and r
     - If not available, Try `curl` or `wget` to fetch the information.
 
 
+## Publishing a release
+
+The phrase `publish release` (or "ship what we just did") is enough to run this
+whole flow without further prompting. It is only appropriate when **there are
+commits not yet covered by a release** (unpushed commits on `main`, or pushed
+commits newer than the latest release tag) **and the source version has been
+bumped** past the latest published release. If either condition fails, stop and
+report why — do not invent a release. Follow
+[`docs/releases.md`](docs/releases.md#dispatching-a-release) and
+[`docs/contributing.md#versioning`](docs/contributing.md#versioning) for policy.
+
+1. Verify and commit pending changes first (`make`, plus `loomwright --check`
+   on every `examples/*.loom` when the language changed). Check
+   `git status --short --branch` and `git log origin/main..HEAD`; push to
+   `origin/main` once verification and CI are green. A docs-only change with no
+   version bump is not a release on its own.
+2. Compare `project(loomwright VERSION ...)` in `CMakeLists.txt` and `pkgver`
+   in `packaging/arch/PKGBUILD` with `gh release list` and
+   `gh release view <tag>`. They must agree on a version newer than the latest
+   published release. If the version has not moved, stop and ask for a bump (or
+   make one per the versioning policy when the change warrants it).
+3. Check the style of the previous release body with
+   `gh release view <tag> --json body --jq .body`, then write notes to
+   `/tmp/opencode/loomwright-<version>-release-notes.md`. Use the established
+   shape: `## Highlights` with short, factual bullets (include measured numbers
+   with their source) and `## Before running` for behaviour changes, permissions
+   and platform/desktop requirements. The workflow appends `## Downloads` and
+   `Built from commit ...`, so leave those out.
+4. Dispatch with
+   `gh workflow run release.yml --ref main --field description=@/tmp/opencode/loomwright-<version>-release-notes.md`.
+   Use manual dispatch, not `gh release create`: the workflow builds, tests,
+   packages and checksums every artifact. Watch with
+   `gh run watch <id> --exit-status`. If a job fails, fix the cause and rerun;
+   do not claim success early.
+5. Verify with `gh release view v<version> --json name,tagName,assets,body,url`
+   and `gh release list`. The release must be Latest, built from the intended
+   commit, and carry the seven assets (Arch package, source, AppImage, deb, rpm,
+   tarball and `SHA256SUMS`). Native Wayland integration may skip on runners
+   without Weston; that is not a release failure.
+
+
 ## Gotchas
 
 - NEVER use subagents UNLESS the user asks you to use them (whether explicitly at the start of the task or mid-task, user message containing `@explore` or `@general` count as explicit ask).
