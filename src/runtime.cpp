@@ -2158,6 +2158,13 @@ Task Runtime::eval(const ExprPtr& expr, const EventContext& context, Value& out)
             out = apply_binary(op, left, right);
             break;
         }
+        case Expr::Kind::Conditional: {
+            Value condition;
+            LOOMWRIGHT_EVAL(expr->args.at(0), context, condition);
+            // Only the selected arm runs, even when the other one waits.
+            LOOMWRIGHT_EVAL(expr->args.at(condition.truthy() ? 1 : 2), context, out);
+            break;
+        }
         case Expr::Kind::Call: {
             std::vector<Value> args;
             args.reserve(expr->args.size());
@@ -2242,6 +2249,10 @@ Value Runtime::eval_pure(const Expr& expr, const EventContext& context) {
                                     eval_operand(*expr.args.at(1), context, right));
             }
             return apply_binary(op, eval_pure(*expr.args.at(0), context), eval_pure(*expr.args.at(1), context));
+        }
+        case Expr::Kind::Conditional: {
+            const Value condition = eval_pure(*expr.args.at(0), context);
+            return eval_pure(condition.truthy() ? *expr.args.at(1) : *expr.args.at(2), context);
         }
         case Expr::Kind::Call: {
             // A built-in function never waits, so it is evaluated here. A

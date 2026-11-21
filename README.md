@@ -202,7 +202,7 @@ loom "sample" {
 }
 ```
 
-Run `loomwright --docs` for the full guide. Useful topics: `events`, `pointer`, `mouse`, `keyboard`, `input`, `desktop`, `flow`, `lists`, `strings`, `functions`, `ahk`.
+Run `loomwright --docs` for the full guide. Useful topics: `events`, `pointer`, `mouse`, `keyboard`, `input`, `desktop`, `flow`, `expressions`, `lists`, `strings`, `functions`, `ahk`.
 
 | Area | Highlights |
 |---|---|
@@ -211,9 +211,20 @@ Run `loomwright --docs` for the full guide. Useful topics: `events`, `pointer`, 
 | Mouse | hold/free/tap with independent tokens |
 | Keyboard | press/free/tap chords, `type`, AHK-style `send`, native `remap`, `consume key` |
 | Desktop | scroll, clipboard, notifications, opt-in launch, active-window queries, GUI dialogs/panels |
-| Flow | variables, compound `set` (`+=`, `-=`, `*=`, `/=`, `%=`), expressions, if/else if, for/repeat/while, break/continue, wait, assert, log |
+| Flow | variables, compound `set` (`+=`, `-=`, `*=`, `/=`, `%=`), `COND ? THEN : ELSE`, if/else if, for/repeat/while, break/continue, wait, assert, log |
 | Data | lists with literals, indexing, `split`/`join`/`sort`/`append`/`reverse`/`count`, string helpers, `sum`/`avg` |
 | Functions | user-defined `func` with parameters and `return` |
+
+### Expressions
+
+```loom
+set label = score >= 60 ? "pass" : "retry"
+set picked = enabled ? first(items) : last(items)  # only one arm runs
+```
+
+`COND ? THEN : ELSE` uses the same truthiness as `if`, evaluates only the
+selected arm, and groups right to left. See `loomwright --docs expressions` for
+the full operator list.
 
 ### Lists
 

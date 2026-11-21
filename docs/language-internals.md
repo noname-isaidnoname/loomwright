@@ -63,8 +63,15 @@ variable raises a runtime error.
 ### Expressions
 
 `Expr::Kind` in `src/ast.hpp`: `Literal`, `Variable`, `Unary`, `Binary`,
-`Call`, `List`, `Index`. Operators are `+ - * / %`, comparisons, `and`/`or`
-(also `&&`/`||`), unary `-`/`+`/`not`/`!`, and parentheses.
+`Call`, `List`, `Index`, `Conditional`. Operators are `+ - * / %`, comparisons,
+`and`/`or` (also `&&`/`||`), unary `-`/`+`/`not`/`!`, parentheses, and the
+ternary `COND ? THEN : ELSE`. The ternary is the lowest-precedence operator and
+right-associative; its `args` hold `[condition, then, else]`. Both `eval()` and
+`eval_pure()` evaluate the condition first and then only the selected arm, so an
+unselected arm with side effects or a waiting call never runs.
+`propagate_argument_flags()` marks the whole node `may_wait`/not `call_free`
+when any of the three children is, which keeps the coroutine and borrow paths
+correct.
 
 ## AST and data model
 

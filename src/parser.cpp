@@ -755,6 +755,24 @@ private:
             propagate_argument_flags(*node);
             left = node;
         }
+
+        // The ternary is the lowest-precedence operator and is right-associative.
+        // Only top-level calls parse it, so every binary operator binds tighter.
+        if (min_precedence == 0 && is_value("?")) {
+            advance();
+            ExprPtr node = std::make_shared<Expr>();
+            node->kind = Expr::Kind::Conditional;
+            node->line = token.line;
+            node->args.push_back(left);
+            // The middle is a full expression, so a nested ternary is allowed.
+            node->args.push_back(parse_expr());
+            expect(":");
+            // Parsing the else branch from precedence zero makes `a ? b : c ? d : e`
+            // group as `a ? b : (c ? d : e)`.
+            node->args.push_back(parse_expr(0));
+            propagate_argument_flags(*node);
+            left = node;
+        }
         return left;
     }
 

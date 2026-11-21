@@ -33,13 +33,16 @@ struct StatementResult {
     std::string error;
 };
 
-StatementResult run_statements(const std::string& body) {
-    Script script = parse("loom \"statements\" { when app starts { " + body + " } }");
+StatementResult run_parsed(const Script& script) {
     Runtime runtime(script, Runtime::Options{});
     runtime.set_backend(std::make_unique<RecordingBackend>());
     runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
     runtime.scheduler().run();
     return StatementResult{runtime.variables(), runtime.runtime_error()};
+}
+
+StatementResult run_statements(const std::string& body) {
+    return run_parsed(parse("loom \"statements\" { when app starts { " + body + " } }"));
 }
 
 }  // namespace
@@ -461,6 +464,147 @@ loom "waiting-rhs" {
     runtime.scheduler().run();
     CHECK_TRUE(runtime.runtime_error().empty());
     CHECK_EQ(runtime.variables().at("n").to_string(), std::string("15"));
+}
+
+TEST_CASE(evaluates_ternary_truthiness_and_pure_path) {
+    CHECK_EQ(eval_expression("true ? 1 : 2").to_string(), std::string("1"));
+    CHECK_EQ(eval_expression("false ? 1 : 2").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("0 ? 1 : 2").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("0.0 ? 1 : 2").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("\"\" ? 1 : 2").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("[] ? 1 : 2").to_string(), std::string("1"));  // a list value is truthy even when empty
+    CHECK_EQ(eval_expression("[0] ? 1 : 2").to_string(), std::string("1"));
+    CHECK_EQ(eval_expression("1 or 0 ? 2 : 3").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("0 and 1 ? 2 : 3").to_string(), std::string("3"));
+    CHECK_EQ(eval_expression("1 ? 2 : 3 ? 4 : 5").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("0 ? 2 : 3 ? 4 : 5").to_string(), std::string("4"));
+    CHECK_EQ(eval_expression("1 ? 0 ? 4 : 5 : 6").to_string(), std::string("5"));
+    CHECK_EQ(eval_expression("1 + 2 * 3 > 6 ? \"big\" : \"small\"").to_string(), std::string("big"));
+    CHECK_EQ(eval_expression("len([1, 2]) ? \"yes\" : \"no\"").to_string(), std::string("yes"));
+}
+
+TEST_CASE(ternary_uses_value_truthiness_for_no_value) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "ternary-truth" {
+    func nothing() {
+        return
+    }
+    when app starts {
+        set no_value = nothing()
+        set from_none = no_value ? 1 : 2
+        set from_empty = "" ? 1 : 2
+        set from_empty_list = [] ? 1 : 2
+    }
+}
+)LOOMWRIGHT");
+    const auto result = run_parsed(script);
+    CHECK_TRUE(result.error.empty());
+    CHECK_EQ(result.variables.at("from_none").to_string(), std::string("2"));
+    CHECK_EQ(result.variables.at("from_empty").to_string(), std::string("2"));
+    CHECK_EQ(result.variables.at("from_empty_list").to_string(), std::string("1"));
+}
+
+TEST_CASE(ternary_is_lazy_and_keeps_branch_errors_identical) {
+    const Script skipped_else = parse(R"LOOMWRIGHT(
+loom "lazy-else" {
+    func boom() {
+        return 1 % 0
+    }
+    when app starts {
+        set result = true ? 5 : boom()
+    }
+}
+)LOOMWRIGHT");
+    const auto else_result = run_parsed(skipped_else);
+    CHECK_TRUE(else_result.error.empty());
+    CHECK_EQ(else_result.variables.at("result").to_string(), std::string("5"));
+
+    const Script skipped_then = parse(R"LOOMWRIGHT(
+loom "lazy-then" {
+    func boom() {
+        return 1 % 0
+    }
+    when app starts {
+        set result = false ? boom() : 6
+    }
+}
+)LOOMWRIGHT");
+    const auto then_result = run_parsed(skipped_then);
+    CHECK_TRUE(then_result.error.empty());
+    CHECK_EQ(then_result.variables.at("result").to_string(), std::string("6"));
+
+    CHECK_TRUE(run_statements("set result = false ? 7 : 1 % 0").error.contains("Division by zero"));
+    CHECK_TRUE(run_statements("set result = true ? 1 % 0 : 7").error.contains("Division by zero"));
+}
+
+TEST_CASE(ternary_skips_unselected_side_effects) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "lazy-side-effects" {
+    func add() {
+        call append(items, 9)
+        return 0
+    }
+    when app starts {
+        set items = [1]
+        set kept = true ? 1 : add()
+        set changed = false ? 2 : add()
+    }
+}
+)LOOMWRIGHT");
+    const auto result = run_parsed(script);
+    CHECK_TRUE(result.error.empty());
+    CHECK_EQ(result.variables.at("kept").to_string(), std::string("1"));
+    CHECK_EQ(result.variables.at("changed").to_string(), std::string("0"));
+    CHECK_EQ(result.variables.at("items").to_string(), std::string("[1, 9]"));
+}
+
+TEST_CASE(ternary_evaluates_only_the_selected_waiting_branch) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "lazy-wait" {
+    func delayed() {
+        wait 1ms
+        return 7
+    }
+    when app starts {
+        set chosen = true ? delayed() : 1
+        set other = false ? delayed() : 2
+        set waiting_condition = delayed() ? 3 : 4
+    }
+}
+)LOOMWRIGHT");
+    const auto result = run_parsed(script);
+    CHECK_TRUE(result.error.empty());
+    CHECK_EQ(result.variables.at("chosen").to_string(), std::string("7"));
+    CHECK_EQ(result.variables.at("other").to_string(), std::string("2"));
+    CHECK_EQ(result.variables.at("waiting_condition").to_string(), std::string("3"));
+}
+
+TEST_CASE(ternary_works_in_set_log_if_and_arguments) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "ternary-contexts" {
+    when app starts {
+        set items = [10, 20]
+        set picked = len(items) > 1 ? first(items) : last(items)
+        log (picked == 10 ? "first" : "last")
+        if (false ? 1 : 0) {
+            set branch = "then"
+        } else {
+            set branch = "else"
+        }
+        set nested = str(true ? 1 : 2)
+    }
+}
+)LOOMWRIGHT");
+    StatementResult result;
+    const auto output = loomwright_test::capture_output([&]() {
+        result = run_parsed(script);
+        return 0;
+    });
+    CHECK_TRUE(result.error.empty());
+    CHECK_TRUE(output.out.contains("first"));
+    CHECK_EQ(result.variables.at("picked").to_string(), std::string("10"));
+    CHECK_EQ(result.variables.at("branch").to_string(), std::string("else"));
+    CHECK_EQ(result.variables.at("nested").to_string(), std::string("1"));
 }
 
 TEST_CASE(lists_are_mutable_and_compare_by_value) {

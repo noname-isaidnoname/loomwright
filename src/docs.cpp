@@ -42,7 +42,8 @@ Syntax rules
 * Strings use single or double quotes. Escape sequences include \\, \n, \t.
 * Durations: 25ms, 0.5s, 2m, 1h. A bare number in a duration position means seconds.
 * Expressions support + - * / %, comparisons, and/or/not, parentheses, variables,
-  literals, and function calls. Booleans are true and false.
+  literals, function calls, and the ternary `COND ? THEN : ELSE`. Booleans are
+  true and false.
 
 Values
 ------
@@ -264,6 +265,14 @@ the `+` expression and writes the result back, so string and list `+=`
 concatenate and `%=` uses the same remainder rule. The variable must already
 exist; a compound assignment to an undefined name is a runtime error.
 
+The ternary expression `COND ? THEN : ELSE` uses the same truthiness as `if`:
+0, 0.0, false, "", and no value are false; everything else — including an
+empty list — is true. It is **lazy**: only the selected arm is evaluated, so an
+unselected arm can contain a failing or waiting function without any effect.
+`? :` binds more loosely than every other operator and groups right to left, so
+`a ? b : c ? d : e` means `a ? b : (c ? d : e)`. Use parentheses to group the
+condition or the middle expression when needed.
+
 Functions: min(a,b,...), max(a,b,...), abs(x), round(x), floor(x), ceil(x),
 sqrt(x), pow(base, exponent), sign(x), gcd(a, b), lcm(a, b), sum(list),
 avg(list), clamp(value, low, high), int(x), float(x), str(x), bool(x), len(x),
@@ -456,6 +465,10 @@ const std::vector<std::pair<std::string, std::vector<std::string>>>& reference()
           "for NAME = START to END step STEP { ... }", "for NAME in LIST { ... }",
           "break", "continue", "wait DURATION", "assert EXPR", "log EXPR",
           "func NAME(PARAMS) { ... }", "return EXPR"}},
+        {"expressions",
+         {"COND ? THEN : ELSE (lazy, right-associative)", "a + b", "a - b", "a * b", "a / b", "a % b",
+          "a == b", "a != b", "a < b", "a <= b", "a > b", "a >= b",
+          "a and b", "a or b", "not a", "( EXPR )"}},
         {"lists",
          {"[VALUE, ...]", "LIST[INDEX]", "len(LIST)", "join(LIST, SEPARATOR)", "split(TEXT, SEPARATOR)",
           "append(LIST, VALUE)", "sort(LIST)", "contains(LIST, VALUE)", "reverse(LIST_OR_TEXT)",

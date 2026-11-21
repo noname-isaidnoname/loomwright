@@ -37,6 +37,14 @@ bool has_message_containing(const std::vector<Diagnostic>& diagnostics, const st
     return false;
 }
 
+const Expr& expr_child(const ExprPtr& expr, size_t index) { return *expr->args.at(index); }
+
+ExprPtr expression_of(const std::string& expression) {
+    const Script script =
+        parse("loom \"expr\" { when app starts { set result = " + expression + " } }");
+    return script.events.at(0).body.at(0).exprs.at(0);
+}
+
 }  // namespace
 
 TEST_CASE(parse_two_spots_example) {
@@ -697,6 +705,80 @@ loom "compound" {
     CHECK_THROWS(parse("loom \"bad\" { when app starts { set n += } }"), ParseError);
     CHECK_THROWS(parse("loom \"bad\" { when app starts { set n += 1 2 } }"), ParseError);
     CHECK_THROWS(parse("loom \"bad\" { when app starts { set 1 += 2 } }"), ParseError);
+}
+
+TEST_CASE(lexer_recognizes_ternary_operators) {
+    const auto tokens = tokenize("set r = flag ? 1 : 2");
+    std::vector<std::string> ops;
+    for (const auto& token : tokens) {
+        if (token.kind == TokenKind::Op) ops.push_back(token.value.to_string());
+    }
+    CHECK_EQ(ops, std::vector<std::string>({"=", "?", ":"}));
+}
+
+TEST_CASE(parses_ternary_with_precedence_and_associativity) {
+    {
+        const auto expr = expression_of("1 or 0 ? 2 : 3");
+        CHECK_TRUE(expr->kind == Expr::Kind::Conditional);
+        CHECK_EQ(expr->args.size(), size_t(3));
+        CHECK_TRUE(expr_child(expr, 0).kind == Expr::Kind::Binary);
+        CHECK_EQ(expr_child(expr, 0).name, std::string("or"));
+        CHECK_EQ(expr_child(expr, 1).literal.to_string(), std::string("2"));
+        CHECK_EQ(expr_child(expr, 2).literal.to_string(), std::string("3"));
+    }
+    {
+        const auto expr = expression_of("1 + 2 * 3 ? 4 : 5");
+        CHECK_TRUE(expr->kind == Expr::Kind::Conditional);
+        const Expr& condition = expr_child(expr, 0);
+        CHECK_TRUE(condition.kind == Expr::Kind::Binary);
+        CHECK_EQ(condition.name, std::string("+"));
+        const Expr& product = *condition.args.at(1);
+        CHECK_TRUE(product.kind == Expr::Kind::Binary);
+        CHECK_EQ(product.name, std::string("*"));
+    }
+    {
+        const auto expr = expression_of("1 ? 2 : 3 or 4");
+        CHECK_TRUE(expr->kind == Expr::Kind::Conditional);
+        CHECK_TRUE(expr_child(expr, 2).kind == Expr::Kind::Binary);
+        CHECK_EQ(expr_child(expr, 2).name, std::string("or"));
+    }
+    {
+        const auto expr = expression_of("1 ? 2 : 3 ? 4 : 5");
+        CHECK_TRUE(expr->kind == Expr::Kind::Conditional);
+        CHECK_TRUE(expr_child(expr, 2).kind == Expr::Kind::Conditional);
+        CHECK_EQ(expr_child(expr, 2).args.at(0)->literal.to_string(), std::string("3"));
+    }
+    {
+        const auto expr = expression_of("1 ? 0 ? 4 : 5 : 6");
+        CHECK_TRUE(expr->kind == Expr::Kind::Conditional);
+        CHECK_TRUE(expr_child(expr, 1).kind == Expr::Kind::Conditional);
+        CHECK_EQ(expr_child(expr, 1).args.size(), size_t(3));
+        CHECK_EQ(expr_child(expr, 1).args.at(2)->literal.to_string(), std::string("5"));
+        CHECK_EQ(expr_child(expr, 2).literal.to_string(), std::string("6"));
+    }
+    {
+        const auto expr = expression_of("str(1 ? 2 : 3)");
+        CHECK_TRUE(expr->kind == Expr::Kind::Call);
+        CHECK_EQ(expr->args.size(), size_t(1));
+        CHECK_TRUE(expr_child(expr, 0).kind == Expr::Kind::Conditional);
+    }
+}
+
+TEST_CASE(static_check_accepts_ternary_and_rejects_malformed) {
+    const Script valid = parse(R"LOOMWRIGHT(
+loom "ternary" {
+    when app starts {
+        set a = true ? 1 : 2
+        log (a > 0 ? "yes" : "no")
+        if (a ? true : false) { log "ok" }
+    }
+}
+)LOOMWRIGHT");
+    CHECK_TRUE(!has_error(check_script(valid)));
+
+    CHECK_THROWS(parse("loom \"bad\" { when app starts { set r = true ? 1 } }"), ParseError);
+    CHECK_THROWS(parse("loom \"bad\" { when app starts { set r = true : 1 } }"), ParseError);
+    CHECK_THROWS(parse("loom \"bad\" { when app starts { set r = ? 1 : 2 } }"), ParseError);
 }
 
 TEST_CASE(static_check_rejects_duplicate_and_shadowing_functions) {
