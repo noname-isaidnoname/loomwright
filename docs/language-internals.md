@@ -107,11 +107,11 @@ carry the resolved `Expr::builtin`, so evaluation dispatches on the enum instead
 comparing spellings while a script runs. Current groups:
 
 - Numbers/general: `min`, `max`, `abs`, `round`, `floor`, `ceil`, `sqrt`,
-  `clamp`, `int`, `float`, `is_number`, `str`, `bool`, `len`, `random`,
-  `randint`, `elapsed`.
-- Strings: `upper`, `lower`, `trim`, `starts_with`, `ends_with`, `contains`,
-  `replace`, `substr`, `index_of`.
-- Lists: `join`, `split`, `append`, `sort`.
+  `pow`, `sign`, `gcd`, `lcm`, `sum`, `avg`, `clamp`, `int`, `float`,
+  `is_number`, `str`, `bool`, `len`, `random`, `randint`, `elapsed`.
+- Strings: `upper`, `lower`, `trim`, `title`, `reverse`, `starts_with`,
+  `ends_with`, `contains`, `replace`, `substr`, `index_of`.
+- Lists: `join`, `split`, `append`, `sort`, `reverse`, `first`, `last`, `count`.
 - Runtime state: `key_down`, `mouse_held`, `suspend_hotkeys`,
   `hotkeys_suspended`, `set_hotkey_enabled`, `hotkey_enabled`, `screen_width`,
   `screen_height`.

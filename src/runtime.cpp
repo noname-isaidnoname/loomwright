@@ -13,6 +13,7 @@
 #include <linux/input.h>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <sys/signalfd.h>
 #include <unistd.h>
 
@@ -408,6 +409,111 @@ bool take_offset(std::string_view& text, int& offset) {
     // versions. Also handle the usual X geometry spelling (e.g. -1920+0).
     if (!take_char(text, '+') && !text.starts_with('-')) return false;
     return take_number(text, offset, true);
+}
+
+/// The magnitude of a signed integer as an unsigned value. Subtracting the
+/// unsigned form avoids the undefined behaviour of negating LLONG_MIN.
+unsigned long long integer_magnitude(long long value) {
+    const auto unsigned_value = static_cast<unsigned long long>(value);
+    return value < 0 ? 0ULL - unsigned_value : unsigned_value;
+}
+
+/// Euclid's algorithm on magnitudes. The result cannot overflow.
+unsigned long long unsigned_gcd(unsigned long long left, unsigned long long right) {
+    while (right != 0) {
+        const unsigned long long remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    return left;
+}
+
+/// The only gcd magnitude that does not fit a signed long long is 2^63, which
+/// needs an LLONG_MIN input. Report it instead of wrapping or invoking UB.
+long long signed_gcd(long long left, long long right) {
+    const unsigned long long result = unsigned_gcd(integer_magnitude(left), integer_magnitude(right));
+    if (result > static_cast<unsigned long long>(std::numeric_limits<long long>::max())) {
+        throw RuntimeErrorLoomwright("integer overflow in gcd()");
+    }
+    return static_cast<long long>(result);
+}
+
+/// lcm(0, n) is 0. Otherwise divide before multiplying and check the product
+/// so a large mathematical result raises a clear error instead of wrapping.
+long long signed_lcm(long long left, long long right) {
+    if (left == 0 || right == 0) return 0;
+    const unsigned long long magnitude_left = integer_magnitude(left);
+    const unsigned long long magnitude_right = integer_magnitude(right);
+    const unsigned long long reduced = magnitude_left / unsigned_gcd(magnitude_left, magnitude_right);
+    const unsigned long long limit = static_cast<unsigned long long>(std::numeric_limits<long long>::max());
+    if (reduced > limit / magnitude_right) {
+        throw RuntimeErrorLoomwright("integer overflow in lcm()");
+    }
+    return static_cast<long long>(reduced * magnitude_right);
+}
+
+/// Add a list of numbers. Integer-only lists stay exact; one float promotes
+/// the whole sum to a double. Non-numeric elements and integer overflow throw.
+Value sum_numbers(const std::vector<Value>& items, const std::string& name) {
+    long long integer_total = 0;
+    double real_total = 0.0;
+    bool floating = false;
+    for (const Value& item : items) {
+        if (!item.is_number()) {
+            throw RuntimeErrorLoomwright(name + "() expects a list of numbers, got " + type_name(item));
+        }
+        if (!floating && item.type == Value::Type::Float) {
+            floating = true;
+            real_total = static_cast<double>(integer_total);
+        }
+        if (floating) {
+            real_total += item.as_double();
+            continue;
+        }
+        const long long value = item.integer;
+        if ((value > 0 && integer_total > std::numeric_limits<long long>::max() - value) ||
+            (value < 0 && integer_total < std::numeric_limits<long long>::min() - value)) {
+            throw RuntimeErrorLoomwright("integer overflow in " + name + "()");
+        }
+        integer_total += value;
+    }
+    return floating ? Value::of_float(real_total) : Value::of_int(integer_total);
+}
+
+/// Reverse the UTF-8 characters of `text` without splitting a multi-byte
+/// character. A stray continuation byte stays with the byte before it, as in
+/// utf8_length()'s character count.
+std::string reverse_utf8(const std::string& text) {
+    std::vector<std::string_view> characters;
+    size_t offset = 0;
+    while (offset < text.size()) {
+        size_t end = offset + 1;
+        while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80) ++end;
+        characters.emplace_back(text.data() + offset, end - offset);
+        offset = end;
+    }
+    std::string out;
+    out.reserve(text.size());
+    for (auto it = characters.rbegin(); it != characters.rend(); ++it) out.append(*it);
+    return out;
+}
+
+/// Title-case ASCII letters. Every non-letter byte is a word boundary and is
+/// copied unchanged, so digits, spaces and punctuation separate words.
+std::string title_case(const std::string& text) {
+    std::string out = text;
+    bool start_of_word = true;
+    for (char& c : out) {
+        const auto raw = static_cast<unsigned char>(c);
+        const bool letter = (raw >= 'A' && raw <= 'Z') || (raw >= 'a' && raw <= 'z');
+        if (!letter) {
+            start_of_word = true;
+            continue;
+        }
+        c = static_cast<char>(start_of_word ? std::toupper(raw) : std::tolower(raw));
+        start_of_word = false;
+    }
+    return out;
 }
 
 }  // namespace
@@ -1509,7 +1615,11 @@ Value Runtime::call_builtin(Builtin builtin, const std::string& name, std::vecto
         require(1);
         if (args[0].type == Value::Type::Float) return Value::of_float(std::fabs(args[0].real));
         const long long value = args[0].as_int();
-        return Value::of_int(value < 0 ? -value : value);
+        const unsigned long long magnitude = integer_magnitude(value);
+        if (magnitude > static_cast<unsigned long long>(std::numeric_limits<long long>::max())) {
+            throw RuntimeErrorLoomwright("integer overflow in abs()");
+        }
+        return Value::of_int(static_cast<long long>(magnitude));
     }
     case Builtin::Round: {
         require(1);
@@ -1528,6 +1638,39 @@ Value Runtime::call_builtin(Builtin builtin, const std::string& name, std::vecto
         const double value = args[0].as_double();
         if (value < 0.0) throw RuntimeErrorLoomwright("math domain error");
         return Value::of_float(std::sqrt(value));
+    }
+    case Builtin::Pow: {
+        require(2);
+        // Unlike sqrt(), pow() keeps IEEE results: an undefined real result
+        // (e.g. a negative base with a fractional exponent) returns NaN.
+        return Value::of_float(std::pow(args[0].as_double(), args[1].as_double()));
+    }
+    case Builtin::Sign: {
+        require(1);
+        const double value = args[0].as_double();
+        if (std::isnan(value)) throw RuntimeErrorLoomwright("sign() cannot be applied to NaN");
+        return Value::of_int(value < 0.0 ? -1 : (value > 0.0 ? 1 : 0));
+    }
+    case Builtin::Gcd: {
+        require(2);
+        return Value::of_int(signed_gcd(args[0].as_int(), args[1].as_int()));
+    }
+    case Builtin::Lcm: {
+        require(2);
+        return Value::of_int(signed_lcm(args[0].as_int(), args[1].as_int()));
+    }
+    case Builtin::Sum: {
+        require(1);
+        if (!args[0].is_list()) throw RuntimeErrorLoomwright(name + "() expects a list, got " + type_name(args[0]));
+        return sum_numbers(args[0].list_items(), name);
+    }
+    case Builtin::Avg: {
+        require(1);
+        if (!args[0].is_list()) throw RuntimeErrorLoomwright(name + "() expects a list, got " + type_name(args[0]));
+        const std::vector<Value>& items = args[0].list_items();
+        if (items.empty()) throw RuntimeErrorLoomwright("avg() requires a non-empty list");
+        const Value total = sum_numbers(items, name);
+        return Value::of_float(total.as_double() / static_cast<double>(items.size()));
     }
     case Builtin::Clamp: {
         require(3);
@@ -1749,6 +1892,10 @@ Value Runtime::call_builtin(Builtin builtin, const std::string& name, std::vecto
         require(1);
         return Value::of_str(trim_ascii(require_string(0)));
     }
+    case Builtin::Title: {
+        require(1);
+        return Value::of_str(title_case(require_string(0)));
+    }
     case Builtin::StartsWith: {
         require(2);
         const std::string& text = require_string(0);
@@ -1865,6 +2012,46 @@ Value Runtime::call_builtin(Builtin builtin, const std::string& name, std::vecto
         std::stable_sort(items.begin(), items.end(),
                          [](const Value& left, const Value& right) static { return compare_values(left, right) < 0; });
         return args[0];
+    }
+    case Builtin::Reverse: {
+        require(1);
+        if (args[0].type == Value::Type::Str) return Value::of_str(reverse_utf8(args[0].text));
+        if (!args[0].is_list()) {
+            throw RuntimeErrorLoomwright(std::string("reverse() expects a list or a string, got ") +
+                                         type_name(args[0]));
+        }
+        const std::vector<Value>& items = args[0].list_items();
+        // A fresh ListBox: the shared storage of the input list is untouched.
+        return Value::of_list(std::vector<Value>(items.rbegin(), items.rend()));
+    }
+    case Builtin::First: {
+        require(1);
+        if (!args[0].is_list()) {
+            throw RuntimeErrorLoomwright(std::string("first() expects a list, got ") + type_name(args[0]));
+        }
+        const std::vector<Value>& items = args[0].list_items();
+        if (items.empty()) throw RuntimeErrorLoomwright("first() requires a non-empty list");
+        return items.front();
+    }
+    case Builtin::Last: {
+        require(1);
+        if (!args[0].is_list()) {
+            throw RuntimeErrorLoomwright(std::string("last() expects a list, got ") + type_name(args[0]));
+        }
+        const std::vector<Value>& items = args[0].list_items();
+        if (items.empty()) throw RuntimeErrorLoomwright("last() requires a non-empty list");
+        return items.back();
+    }
+    case Builtin::Count: {
+        require(2);
+        if (!args[0].is_list()) {
+            throw RuntimeErrorLoomwright(std::string("count() expects a list, got ") + type_name(args[0]));
+        }
+        long long matches = 0;
+        for (const Value& item : args[0].list_items()) {
+            if (value_equals(item, args[1])) ++matches;
+        }
+        return Value::of_int(matches);
     }
 
     default:

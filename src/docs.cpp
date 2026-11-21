@@ -257,7 +257,8 @@ Variables: screen_width, screen_height, event_key, event_edge, plus names
 created with `set` or `clip read into`.
 
 Functions: min(a,b,...), max(a,b,...), abs(x), round(x), floor(x), ceil(x),
-sqrt(x), clamp(value, low, high), int(x), float(x), str(x), bool(x), len(x),
+sqrt(x), pow(base, exponent), sign(x), gcd(a, b), lcm(a, b), sum(list),
+avg(list), clamp(value, low, high), int(x), float(x), str(x), bool(x), len(x),
 random(), randint(low, high), elapsed(), key_down("A"), mouse_held("left"),
 screen_width(), screen_height(), active_window_title(), active_window_class(),
 active_window_process(), active_window_pid(), gui_alert("text"), gui_input("label"),
@@ -268,14 +269,35 @@ screen_width/screen_height variables are also available without parentheses.
 Use `call gui_alert("done")` and `call set_hotkey_enabled("F8", false)` when the
 function only performs an action and produces no useful value.
 
-String functions: upper(text), lower(text), trim(text),
-starts_with(text, prefix), ends_with(text, suffix), contains(text, needle),
-replace(text, from, to), substr(text, start), substr(text, start, length),
-index_of(text, needle). Positions and lengths count characters, not bytes.
+`pow` always returns a float and keeps the IEEE result of an undefined real
+power, so `pow(-1, 0.5)` is NaN rather than an error. `sign` returns -1, 0 or 1
+and rejects NaN. `abs` reports an error for the most negative 64-bit integer
+instead of wrapping. `gcd` and `lcm` return non-negative integers: gcd(0, 0) is 0,
+gcd(0, n) is abs(n), and lcm(0, n) is 0. A result too large for a signed
+64-bit integer raises a runtime error instead of wrapping. `sum` returns an
+integer for an all-integer list and a float as soon as any element is a float;
+`sum([])` is 0. `avg` always returns a float and requires a non-empty list.
+Both accept only numeric elements and report other types instead of coercing
+them.
+
+String functions: upper(text), lower(text), trim(text), title(text),
+reverse(text), starts_with(text, prefix), ends_with(text, suffix),
+contains(text, needle), replace(text, from, to), substr(text, start),
+substr(text, start, length), index_of(text, needle). Positions and lengths
+count characters, not bytes. `title` uppercases the first ASCII letter of each
+word and lowercases the rest. A word is a run of ASCII letters: digits, spaces
+and punctuation (including apostrophes) are boundaries copied unchanged, so
+`title("hello WORLD! it's 2fast")` is `Hello World! It'S 2Fast`. `reverse`
+reverses the characters of a string without splitting a multi-byte character.
 
 List functions: len(list), join(list, separator), split(text, separator),
-append(list, value), sort(list), contains(list, value). `append` and `sort`
-change the list in place and return it.
+append(list, value), sort(list), contains(list, value), reverse(list),
+first(list), last(list), count(list, value). `append` and `sort` change the
+list in place and return it. `reverse` returns a new list and never changes the
+input, even when the variable is copied; `first` and `last` return an element
+without removing it, and `count` uses the same equality as `==` (numeric types
+compare by value, lists by elements). `first`, `last` and `avg` require a
+non-empty list.
 
 The checker rejects a call to a function that does not exist, so a typo is
 reported by `loomwright --check` instead of failing at runtime.
@@ -426,13 +448,16 @@ const std::vector<std::pair<std::string, std::vector<std::string>>>& reference()
           "func NAME(PARAMS) { ... }", "return EXPR"}},
         {"lists",
          {"[VALUE, ...]", "LIST[INDEX]", "len(LIST)", "join(LIST, SEPARATOR)", "split(TEXT, SEPARATOR)",
-          "append(LIST, VALUE)", "sort(LIST)", "contains(LIST, VALUE)"}},
+          "append(LIST, VALUE)", "sort(LIST)", "contains(LIST, VALUE)", "reverse(LIST_OR_TEXT)",
+          "first(LIST)", "last(LIST)", "count(LIST, VALUE)"}},
         {"strings",
-         {"upper(TEXT)", "lower(TEXT)", "trim(TEXT)", "starts_with(TEXT, PREFIX)", "ends_with(TEXT, SUFFIX)",
-          "contains(TEXT, NEEDLE)", "replace(TEXT, FROM, TO)", "substr(TEXT, START)", "substr(TEXT, START, LENGTH)",
+         {"upper(TEXT)", "lower(TEXT)", "trim(TEXT)", "title(TEXT)", "reverse(TEXT)",
+          "starts_with(TEXT, PREFIX)", "ends_with(TEXT, SUFFIX)", "contains(TEXT, NEEDLE)",
+          "replace(TEXT, FROM, TO)", "substr(TEXT, START)", "substr(TEXT, START, LENGTH)",
           "index_of(TEXT, NEEDLE)"}},
         {"functions",
-         {"min", "max", "abs", "round", "floor", "ceil", "sqrt", "clamp", "int", "float", "str",
+         {"min", "max", "abs", "round", "floor", "ceil", "sqrt", "pow", "sign", "gcd", "lcm", "sum",
+          "avg", "clamp", "int", "float", "str",
           "bool", "len", "random", "randint", "elapsed", "key_down", "mouse_held", "screen_width",
           "screen_height", "active_window_title", "active_window_class", "active_window_process",
           "active_window_pid", "gui_alert", "gui_input", "gui_confirm", "suspend_hotkeys",

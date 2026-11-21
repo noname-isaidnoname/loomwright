@@ -1,0 +1,23 @@
+# A tour of the pure built-in helpers: math, list and string functions.
+# Run with `loomwright --run examples/helpers.loom --dry-run` to see the log.
+loom "helpers" {
+    option output = "auto"
+    option panic = "PAUSE"
+
+    when app starts {
+        set values = [4, 9, 16]
+        log "pow(2, 10) = " + str(pow(2, 10))
+        log "sign(-7) = " + str(sign(-7))
+        log "gcd(12, 18) = " + str(gcd(12, 18))
+        log "lcm(4, 6) = " + str(lcm(4, 6))
+        log "sum(values) = " + str(sum(values))
+        log "avg(values) = " + str(avg(values))
+        log "first(values) = " + str(first(values))
+        log "last(values) = " + str(last(values))
+        log "count(values, 9) = " + str(count(values, 9))
+        log "contains(values, 16) = " + str(contains(values, 16))
+        log "reverse(values) = " + str(reverse(values))
+        log "reverse(\"hello\") = " + reverse("hello")
+        log "title(...) = " + title("hello WORLD! it's 2fast")
+    }
+}

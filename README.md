@@ -212,7 +212,7 @@ Run `loomwright --docs` for the full guide. Useful topics: `events`, `pointer`, 
 | Keyboard | press/free/tap chords, `type`, AHK-style `send`, native `remap`, `consume key` |
 | Desktop | scroll, clipboard, notifications, opt-in launch, active-window queries, GUI dialogs/panels |
 | Flow | variables, expressions, if/else if, for/repeat/while, break/continue, wait, assert, log |
-| Data | lists with literals, indexing, `split`/`join`/`sort`/`append`, string helpers |
+| Data | lists with literals, indexing, `split`/`join`/`sort`/`append`/`reverse`/`count`, string helpers, `sum`/`avg` |
 | Functions | user-defined `func` with parameters and `return` |
 
 ### Lists
@@ -223,7 +223,16 @@ set first = items[0]          # negative indexes count from the end
 set more = items + ["gamma"]  # a new list
 call append(items, "delta")   # changes the list in place
 set joined = join(items, ", ")
+set reversed = reverse(items)  # a new list; the original is unchanged
+set head = first(items)
+set matches = count(items, "alpha")
 ```
+
+`reverse` also accepts a string, and `first`, `last`, `count` and `contains`
+read lists without changing them. Math helpers include `pow(base, exp)`,
+`sign(x)`, `gcd(a, b)`, `lcm(a, b)`, `sum(list)` and `avg(list)`;
+`title(text)` title-cases ASCII letters. Run `loomwright --docs functions` for
+the exact semantics and edge cases.
 
 ### Loops and functions
 

@@ -14,6 +14,21 @@ using namespace loomwright;
 using loomwright_test::eval_expression;
 using loomwright_test::RecordingBackend;
 
+namespace {
+
+/// Evaluate one expression in a throwaway script and return the runtime's
+/// error text, so error paths need no exception plumbing in each test.
+std::string expression_error(const std::string& expression) {
+    Script script = parse("loom \"error\" { when app starts { set result = " + expression + " } }");
+    Runtime runtime(script, Runtime::Options{});
+    runtime.set_backend(std::make_unique<RecordingBackend>());
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
+    runtime.scheduler().run();
+    return runtime.runtime_error();
+}
+
+}  // namespace
+
 
 TEST_CASE(evaluates_language_expressions) {
     CHECK_EQ(eval_expression("5-2").to_string(), std::string("3"));
@@ -240,6 +255,87 @@ TEST_CASE(evaluates_list_and_string_functions) {
     CHECK_EQ(eval_expression("substr(\"hello\", -2)").to_string(), std::string("lo"));
     CHECK_EQ(eval_expression("index_of(\"hello\", \"l\")").to_string(), std::string("2"));
     CHECK_EQ(eval_expression("index_of(\"hello\", \"z\")").to_string(), std::string("-1"));
+}
+
+TEST_CASE(evaluates_math_helper_functions) {
+    CHECK_EQ(eval_expression("pow(2, 10)").to_string(), std::string("1024.0"));
+    CHECK_EQ(eval_expression("pow(4, 0.5)").to_string(), std::string("2.0"));
+    CHECK_EQ(eval_expression("pow(-1, 0.5)").to_string(), std::string("NaN"));
+    CHECK_EQ(eval_expression("sign(-42)").to_string(), std::string("-1"));
+    CHECK_EQ(eval_expression("sign(0)").to_string(), std::string("0"));
+    CHECK_EQ(eval_expression("sign(3.5)").to_string(), std::string("1"));
+    CHECK_EQ(eval_expression("gcd(12, 18)").to_string(), std::string("6"));
+    CHECK_EQ(eval_expression("gcd(0, 0)").to_string(), std::string("0"));
+    CHECK_EQ(eval_expression("gcd(0, -15)").to_string(), std::string("15"));
+    CHECK_EQ(eval_expression("lcm(4, 6)").to_string(), std::string("12"));
+    CHECK_EQ(eval_expression("lcm(0, 7)").to_string(), std::string("0"));
+    CHECK_EQ(eval_expression("lcm(-4, 6)").to_string(), std::string("12"));
+    CHECK_EQ(eval_expression("sum([1, 2, 3])").to_string(), std::string("6"));
+    CHECK_EQ(eval_expression("sum([])").to_string(), std::string("0"));
+    CHECK_EQ(eval_expression("sum([1, 2.5])").to_string(), std::string("3.5"));
+    CHECK_EQ(eval_expression("avg([1, 2, 3])").to_string(), std::string("2.0"));
+    CHECK_EQ(eval_expression("avg([1, 2])").to_string(), std::string("1.5"));
+}
+
+TEST_CASE(math_helpers_report_errors_instead_of_undefined_results) {
+    CHECK_TRUE(expression_error("avg([])").contains("avg() requires a non-empty list"));
+    CHECK_TRUE(expression_error("sum([\"x\"])").contains("sum() expects a list of numbers"));
+    CHECK_TRUE(expression_error("sum(42)").contains("sum() expects a list"));
+    CHECK_TRUE(expression_error("sign(\"NaN\")").contains("sign() cannot be applied to NaN"));
+    CHECK_TRUE(expression_error("abs(-9223372036854775807 - 1)").contains("integer overflow in abs()"));
+    CHECK_TRUE(expression_error("gcd(-9223372036854775807 - 1, 0)").contains("integer overflow in gcd()"));
+    CHECK_TRUE(expression_error("lcm(4611686018427387903, 4)").contains("integer overflow in lcm()"));
+    CHECK_TRUE(expression_error("sum([9223372036854775807, 1])").contains("integer overflow in sum()"));
+}
+
+TEST_CASE(reverse_returns_a_copy_and_keeps_utf8_characters_intact) {
+    CHECK_EQ(eval_expression("reverse(\"hello\")").to_string(), std::string("olleh"));
+    CHECK_EQ(eval_expression("reverse(\"caf\xc3\xa9\")").to_string(), std::string("\xc3\xa9" "fac"));
+    CHECK_EQ(eval_expression("reverse([1, 2, 3])").to_string(), std::string("[3, 2, 1]"));
+    CHECK_EQ(eval_expression("reverse([])").to_string(), std::string("[]"));
+
+    const Script script = parse(R"LOOMWRIGHT(
+loom "reverse" {
+    when app starts {
+        set original = [1, 2]
+        set copy = original
+        set reversed = reverse(original)
+        set changed = reversed + [3]
+    }
+}
+)LOOMWRIGHT");
+    Runtime runtime(script, Runtime::Options{});
+    runtime.set_backend(std::make_unique<RecordingBackend>());
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
+    runtime.scheduler().run();
+    CHECK_EQ(runtime.variables().at("original").to_string(), std::string("[1, 2]"));
+    CHECK_EQ(runtime.variables().at("copy").to_string(), std::string("[1, 2]"));
+    CHECK_EQ(runtime.variables().at("reversed").to_string(), std::string("[2, 1]"));
+    CHECK_EQ(runtime.variables().at("changed").to_string(), std::string("[2, 1, 3]"));
+}
+
+TEST_CASE(evaluates_list_and_string_access_helpers) {
+    CHECK_EQ(eval_expression("first([1, 2])").to_string(), std::string("1"));
+    CHECK_EQ(eval_expression("last([1, 2])").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("count([1, 2, 1], 1)").to_string(), std::string("2"));
+    CHECK_EQ(eval_expression("count([1, 1.0, true], 1)").to_string(), std::string("3"));
+    CHECK_EQ(eval_expression("count([[1], [2]], [1])").to_string(), std::string("1"));
+    CHECK_EQ(eval_expression("count([], 1)").to_string(), std::string("0"));
+    CHECK_EQ(eval_expression("contains([1, 2.0], 2)").to_string(), std::string("true"));
+    CHECK_EQ(eval_expression("contains([[1], 2], [1])").to_string(), std::string("true"));
+    CHECK_EQ(eval_expression("title(\"hello WORLD! it's 2fast\")").to_string(),
+             std::string("Hello World! It'S 2Fast"));
+    CHECK_EQ(eval_expression("title(\"  48ALPHA beta\")").to_string(), std::string("  48Alpha Beta"));
+}
+
+TEST_CASE(list_and_string_access_helpers_report_empty_and_type_errors) {
+    CHECK_TRUE(expression_error("first([])").contains("first() requires a non-empty list"));
+    CHECK_TRUE(expression_error("last([])").contains("last() requires a non-empty list"));
+    CHECK_TRUE(expression_error("first(\"abc\")").contains("first() expects a list"));
+    CHECK_TRUE(expression_error("count(\"abc\", \"a\")").contains("count() expects a list"));
+    CHECK_TRUE(expression_error("reverse(42)").contains("reverse() expects a list or a string"));
+    CHECK_TRUE(expression_error("title(42)").contains("title() expects a string"));
+    CHECK_TRUE(expression_error("contains(42, 2)").contains("contains() expects a string, got"));
 }
 
 TEST_CASE(lists_are_mutable_and_compare_by_value) {

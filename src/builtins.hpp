@@ -59,6 +59,17 @@ enum class Builtin : std::uint8_t {
     GuiConfirm,
     GuiValue,
     GuiSetText,
+    Avg,
+    Count,
+    First,
+    Gcd,
+    Lcm,
+    Last,
+    Pow,
+    Reverse,
+    Sign,
+    Sum,
+    Title,
     GuiSetVisible,
 };
 

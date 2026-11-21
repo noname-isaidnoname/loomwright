@@ -618,6 +618,28 @@ loom "arity" {
     CHECK_TRUE(has_message_containing(diagnostics, "Function double() takes 1 argument(s), got 2"));
 }
 
+TEST_CASE(static_check_knows_the_helper_arities) {
+    for (const char* call : {"pow(2, 3)", "sign(-1)", "gcd(4, 6)", "lcm(4, 6)",
+                             "sum([1])", "avg([1])", "reverse([1])", "first([1])",
+                             "last([1])", "count([1], 1)", "title(\"hi\")"}) {
+        const Script script =
+            parse(std::string("loom \"arity\" { when app starts { set result = ") + call + " } }");
+        CHECK_TRUE(!has_error(check_script(script)));
+    }
+    const Script too_few = parse(R"LOOMWRIGHT(
+loom "arity" {
+    when app starts {
+        set a = pow(2)
+        set b = sum()
+    }
+}
+)LOOMWRIGHT");
+    const auto diagnostics = check_script(too_few);
+    CHECK_TRUE(has_error(diagnostics));
+    CHECK_TRUE(has_message_containing(diagnostics, "Function pow() takes 2 argument(s), got 1"));
+    CHECK_TRUE(has_message_containing(diagnostics, "Function sum() takes 1 argument(s), got 0"));
+}
+
 TEST_CASE(static_check_rejects_duplicate_and_shadowing_functions) {
     const Script script = parse(R"LOOMWRIGHT(
 loom "dupes" {
