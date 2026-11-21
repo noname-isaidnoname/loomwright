@@ -39,6 +39,10 @@ bool has_message_containing(const std::vector<Diagnostic>& diagnostics, const st
 
 const Expr& expr_child(const ExprPtr& expr, size_t index) { return *expr->args.at(index); }
 
+bool is_none_literal(const Expr& expr) {
+    return expr.kind == Expr::Kind::Literal && expr.literal.is_none();
+}
+
 ExprPtr expression_of(const std::string& expression) {
     const Script script =
         parse("loom \"expr\" { when app starts { set result = " + expression + " } }");
@@ -521,6 +525,122 @@ loom "lists" {
     CHECK_EQ(body.at(1).exprs.at(0)->args.size(), static_cast<size_t>(0));
     CHECK_TRUE(body.at(2).exprs.at(0)->kind == Expr::Kind::Index);
     CHECK_TRUE(body.at(3).exprs.at(0)->kind == Expr::Kind::Index);
+}
+
+TEST_CASE(parses_slice_expressions) {
+    {
+        // LIST[:] — both bounds omitted and stored as `none` literals.
+        const auto expr = expression_of("items[:]");
+        CHECK_TRUE(expr->kind == Expr::Kind::Slice);
+        CHECK_EQ(expr->args.size(), size_t(3));
+        CHECK_EQ(expr_child(expr, 0).name, std::string("items"));
+        CHECK_TRUE(is_none_literal(expr_child(expr, 1)));
+        CHECK_TRUE(is_none_literal(expr_child(expr, 2)));
+    }
+    {
+        // LIST[:END] — start omitted, end present.
+        const auto expr = expression_of("items[:2]");
+        CHECK_TRUE(expr->kind == Expr::Kind::Slice);
+        CHECK_EQ(expr->args.size(), size_t(3));
+        CHECK_TRUE(is_none_literal(expr_child(expr, 1)));
+        CHECK_EQ(expr_child(expr, 2).literal.to_string(), std::string("2"));
+    }
+    {
+        // LIST[START:] — start present, end omitted.
+        const auto expr = expression_of("items[1:]");
+        CHECK_TRUE(expr->kind == Expr::Kind::Slice);
+        CHECK_EQ(expr_child(expr, 1).literal.to_string(), std::string("1"));
+        CHECK_TRUE(is_none_literal(expr_child(expr, 2)));
+    }
+    {
+        // LIST[START:END] — both bounds present.
+        const auto expr = expression_of("items[1:3]");
+        CHECK_TRUE(expr->kind == Expr::Kind::Slice);
+        CHECK_EQ(expr_child(expr, 1).literal.to_string(), std::string("1"));
+        CHECK_EQ(expr_child(expr, 2).literal.to_string(), std::string("3"));
+    }
+    {
+        // Bounds are full expressions, not just literals.
+        const auto expr = expression_of("items[i+1:n-1]");
+        CHECK_TRUE(expr->kind == Expr::Kind::Slice);
+        CHECK_TRUE(expr_child(expr, 1).kind == Expr::Kind::Binary);
+        CHECK_EQ(expr_child(expr, 1).name, std::string("+"));
+        CHECK_TRUE(expr_child(expr, 2).kind == Expr::Kind::Binary);
+        CHECK_EQ(expr_child(expr, 2).name, std::string("-"));
+    }
+    {
+        // Call bounds are traversed by propagate_argument_flags: builtin
+        // calls make the node non-call-free but never make it wait.
+        const auto expr = expression_of("items[len(items):last(items)]");
+        CHECK_TRUE(expr->kind == Expr::Kind::Slice);
+        CHECK_TRUE(expr_child(expr, 1).kind == Expr::Kind::Call);
+        CHECK_TRUE(expr_child(expr, 2).kind == Expr::Kind::Call);
+        CHECK_TRUE(!expr->call_free);
+        CHECK_TRUE(!expr->may_wait);
+        // A user-function call bound marks the whole node as waiting.
+        const auto waiting = expression_of("items[bound():]");
+        CHECK_TRUE(waiting->kind == Expr::Kind::Slice);
+        CHECK_TRUE(waiting->may_wait);
+    }
+    {
+        // The colon of a ternary in the first expression is not the slice
+        // separator: items[flag ? 0 : 1] is still a plain index.
+        const auto index = expression_of("items[flag ? 0 : 1]");
+        CHECK_TRUE(index->kind == Expr::Kind::Index);
+        CHECK_TRUE(expr_child(index, 1).kind == Expr::Kind::Conditional);
+        // A second, top-level colon does make it a slice.
+        const auto slice = expression_of("items[flag ? 0 : 1 : 2]");
+        CHECK_TRUE(slice->kind == Expr::Kind::Slice);
+        CHECK_TRUE(expr_child(slice, 1).kind == Expr::Kind::Conditional);
+        CHECK_EQ(expr_child(slice, 2).literal.to_string(), std::string("2"));
+    }
+    {
+        // Plain indexing keeps its two-child Index shape exactly.
+        CHECK_TRUE(expression_of("items[0]")->kind == Expr::Kind::Index);
+        CHECK_EQ(expression_of("items[0]")->args.size(), size_t(2));
+        CHECK_TRUE(expression_of("items[-1]")->kind == Expr::Kind::Index);
+        CHECK_EQ(expression_of("items[-1]")->args.size(), size_t(2));
+    }
+    {
+        // Slices chain with other subscripts.
+        const auto expr = expression_of("items[:][0]");
+        CHECK_TRUE(expr->kind == Expr::Kind::Index);
+        CHECK_TRUE(expr_child(expr, 0).kind == Expr::Kind::Slice);
+    }
+}
+
+TEST_CASE(static_check_accepts_slices) {
+    const Script valid = parse(R"LOOMWRIGHT(
+ loom "slices" {
+     when app starts {
+         set items = [1, 2, 3]
+         set a = items[:]
+         set b = items[1:]
+         set c = items[:2]
+         set d = items[len(items) - 1:]
+     }
+ }
+ )LOOMWRIGHT");
+    CHECK_TRUE(!has_error(check_script(valid)));
+
+    const Script with_call = parse(R"LOOMWRIGHT(
+ loom "slices-call" {
+     when app starts {
+         set items = [1, 2, 3]
+         set a = items[first(items):last(items)]
+     }
+ }
+ )LOOMWRIGHT");
+    CHECK_TRUE(!has_error(check_script(with_call)));
+
+    const Script bad_call = parse(R"LOOMWRIGHT(
+ loom "slices-bad" {
+     when app starts {
+         set a = items[missing_bound():]
+     }
+ }
+ )LOOMWRIGHT");
+    CHECK_TRUE(has_message_containing(check_script(bad_call), "Unknown function \"missing_bound\""));
 }
 
 TEST_CASE(parses_for_loops_and_loop_control) {

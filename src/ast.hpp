@@ -42,10 +42,11 @@ enum class SetOp : unsigned char { Assign, Add, Subtract, Multiply, Divide, Modu
 /// An expression tree. `Literal` carries a value; `Variable`, `Unary` and
 /// `Binary` carry a name/operator; `Call` carries its function name and args;
 /// `List` carries its element expressions; `Index` carries a base and an index;
-/// `Conditional` carries [condition, then, else] in `args` and evaluates only
-/// the selected branch.
+/// `Slice` carries [base, start, end] in `args`, where a `Literal` holding
+/// `none` marks an omitted bound; `Conditional` carries [condition, then, else]
+/// in `args` and evaluates only the selected branch.
 struct Expr {
-    enum class Kind { Literal, Variable, Unary, Binary, Call, List, Index, Conditional };
+    enum class Kind { Literal, Variable, Unary, Binary, Call, List, Index, Slice, Conditional };
     enum class EventVariable : unsigned char { None, Key, Edge };
 
     Kind kind = Kind::Literal;

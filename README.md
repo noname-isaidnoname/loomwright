@@ -212,7 +212,7 @@ Run `loomwright --docs` for the full guide. Useful topics: `events`, `pointer`, 
 | Keyboard | press/free/tap chords, `type`, AHK-style `send`, native `remap`, `consume key` |
 | Desktop | scroll, clipboard, notifications, opt-in launch, active-window queries, GUI dialogs/panels |
 | Flow | variables, compound `set` (`+=`, `-=`, `*=`, `/=`, `%=`), `COND ? THEN : ELSE`, if/else if, for/repeat/while, break/continue, wait, assert, log |
-| Data | lists with literals, indexing, `split`/`join`/`sort`/`append`/`reverse`/`count`, string helpers, `sum`/`avg` |
+| Data | lists with literals, indexing and slicing, `split`/`join`/`sort`/`append`/`reverse`/`count`, string helpers, `sum`/`avg` |
 | Functions | user-defined `func` with parameters and `return` |
 
 ### Expressions
@@ -232,6 +232,10 @@ selected arm, and groups right to left. The false values are `0`, `0.0`,
 ```loom
 set items = ["alpha", "beta"]
 set first = items[0]          # negative indexes count from the end
+set pair = items[0:2]         # slice: ["alpha", "beta"]
+set starter = items[:1]       # ["alpha"]
+set tail = items[1:]          # ["beta"]
+set copy = items[:]           # a new list with every element
 set more = items + ["gamma"]  # a new list
 call append(items, "delta")   # changes the list in place
 set joined = join(items, ", ")
@@ -239,6 +243,13 @@ set reversed = reverse(items)  # a new list; the original is unchanged
 set head = first(items)
 set matches = count(items, "alpha")
 ```
+
+A slice `LIST[START:END]` returns a new list from the inclusive `START` to the
+exclusive `END`. Either bound may be omitted (`LIST[:END]`, `LIST[START:]`,
+`LIST[:]`) and bounds are full expressions. Negative bounds count from the end,
+out-of-range bounds are clamped instead of raising an error, and an inverted
+range yields an empty list. The result is always a fresh list, so appending to
+it cannot change the source.
 
 `reverse` also accepts a string, and `first`, `last`, `count` and `contains`
 read lists without changing them. Math helpers include `pow(base, exp)`,

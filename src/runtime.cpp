@@ -273,6 +273,36 @@ Value apply_binary(BinaryOp op, const Value& left, const Value& right) {
     throw RuntimeErrorLoomwright("unsupported operator " + quote_string(binary_op_text(op)));
 }
 
+/// Slice a list. The caller has already checked that `base` is a list and has
+/// evaluated each bound expression exactly once. A `none` bound means it was
+/// omitted and takes the default (0 for start, the list length for end).
+/// Negative bounds count from the end, as they do for indexing; afterwards
+/// every bound is clamped into [0, size] instead of raising "index out of
+/// range", so slicing is forgiving. When start >= end the range is empty.
+/// The result always owns a fresh ListBox, so append/+= on it cannot mutate
+/// the source list even when the slice covers the whole list.
+Value apply_slice(const Value& base, const Value& start_value, const Value& end_value) {
+    const std::vector<Value>& items = base.list_items();
+    const long long size = static_cast<long long>(items.size());
+    const auto normalize = [size](const Value& bound, long long default_value) {
+        if (bound.is_none()) return default_value;
+        long long index = bound.as_int();
+        if (index < 0) index += size;
+        return std::clamp(index, 0LL, size);
+    };
+    const long long start = normalize(start_value, 0);
+    const long long end = normalize(end_value, size);
+
+    std::vector<Value> sliced;
+    if (start < end) {
+        sliced.reserve(static_cast<size_t>(end - start));
+        for (long long index = start; index < end; ++index) {
+            sliced.push_back(items[static_cast<size_t>(index)]);
+        }
+    }
+    return Value::of_list(std::move(sliced));
+}
+
 size_t utf8_length(const std::string& text) {
     size_t count = 0;
     for (unsigned char c : text) {
@@ -2130,6 +2160,21 @@ Task Runtime::eval(const ExprPtr& expr, const EventContext& context, Value& out)
             out = items[static_cast<size_t>(index)];
             break;
         }
+        case Expr::Kind::Slice: {
+            Value base;
+            LOOMWRIGHT_EVAL(expr->args.at(0), context, base);
+            // The base must be a list before any bound is evaluated: a bound
+            // may call a function or wait, so it must not run on a bad base.
+            if (!base.is_list()) {
+                throw RuntimeErrorLoomwright(std::string("only a list can be sliced, got ") + type_name(base));
+            }
+            Value start_value;
+            LOOMWRIGHT_EVAL(expr->args.at(1), context, start_value);
+            Value end_value;
+            LOOMWRIGHT_EVAL(expr->args.at(2), context, end_value);
+            out = apply_slice(base, start_value, end_value);
+            break;
+        }
         case Expr::Kind::Unary: {
             Value value;
             LOOMWRIGHT_EVAL(expr->args.at(0), context, value);
@@ -2229,6 +2274,17 @@ Value Runtime::eval_pure(const Expr& expr, const EventContext& context) {
                 throw RuntimeErrorLoomwright("list index out of range");
             }
             return items[static_cast<size_t>(index)];
+        }
+        case Expr::Kind::Slice: {
+            const Value base = eval_pure(*expr.args.at(0), context);
+            if (!base.is_list()) {
+                throw RuntimeErrorLoomwright(std::string("only a list can be sliced, got ") + type_name(base));
+            }
+            // Bounds that wait are routed to eval() by the parser, so the
+            // coroutine-free path only sees bounds it can evaluate here.
+            const Value start_value = eval_pure(*expr.args.at(1), context);
+            const Value end_value = eval_pure(*expr.args.at(2), context);
+            return apply_slice(base, start_value, end_value);
         }
         case Expr::Kind::Unary:
             return apply_unary(expr.unary_op, eval_pure(*expr.args.at(0), context));

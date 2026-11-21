@@ -275,6 +275,139 @@ TEST_CASE(evaluates_list_and_string_functions) {
     CHECK_EQ(eval_expression("index_of(\"hello\", \"z\")").to_string(), std::string("-1"));
 }
 
+TEST_CASE(slices_return_forgiving_copies) {
+    // All four spellings: start inclusive, end exclusive.
+    CHECK_EQ(eval_expression("[1, 2, 3, 4][1:3]").to_string(), std::string("[2, 3]"));
+    CHECK_EQ(eval_expression("[1, 2, 3, 4][1:]").to_string(), std::string("[2, 3, 4]"));
+    CHECK_EQ(eval_expression("[1, 2, 3, 4][:2]").to_string(), std::string("[1, 2]"));
+    CHECK_EQ(eval_expression("[1, 2, 3, 4][:]").to_string(), std::string("[1, 2, 3, 4]"));
+
+    // Negative bounds count from the end, as indexing does.
+    CHECK_EQ(eval_expression("[1, 2, 3, 4][-2:]").to_string(), std::string("[3, 4]"));
+    CHECK_EQ(eval_expression("[1, 2, 3, 4][:-1]").to_string(), std::string("[1, 2, 3]"));
+    CHECK_EQ(eval_expression("[1, 2, 3, 4][-3:-1]").to_string(), std::string("[2, 3]"));
+    CHECK_EQ(eval_expression("[1, 2, 3, 4][-1:4]").to_string(), std::string("[4]"));
+
+    // Out-of-range bounds clamp instead of raising "index out of range".
+    CHECK_EQ(eval_expression("[1, 2, 3][-100:100]").to_string(), std::string("[1, 2, 3]"));
+    CHECK_EQ(eval_expression("[1, 2, 3][2:100]").to_string(), std::string("[3]"));
+    CHECK_EQ(eval_expression("[1, 2, 3][100:]").to_string(), std::string("[]"));
+    CHECK_EQ(eval_expression("[1, 2, 3][:-100]").to_string(), std::string("[]"));
+
+    // Inverted and empty ranges yield an empty list.
+    CHECK_EQ(eval_expression("[1, 2, 3][2:1]").to_string(), std::string("[]"));
+    CHECK_EQ(eval_expression("[1, 2, 3][2:2]").to_string(), std::string("[]"));
+    CHECK_EQ(eval_expression("[][:]").to_string(), std::string("[]"));
+    CHECK_EQ(eval_expression("[][0:5]").to_string(), std::string("[]"));
+
+    // Variable and expression bounds.
+    const Script variables = parse(R"LOOMWRIGHT(
+ loom "slice-vars" {
+     when app starts {
+         set items = [10, 20, 30, 40]
+         set i = 1
+         set n = 4
+         set a = items[i:n-1]
+         set b = items[len(items) - 2:]
+     }
+ }
+ )LOOMWRIGHT");
+    const auto variable_result = run_parsed(variables);
+    CHECK_TRUE(variable_result.error.empty());
+    CHECK_EQ(variable_result.variables.at("a").to_string(), std::string("[20, 30]"));
+    CHECK_EQ(variable_result.variables.at("b").to_string(), std::string("[30, 40]"));
+
+    // Function-call bounds, both waiting user functions and builtins.
+    const Script calls = parse(R"LOOMWRIGHT(
+ loom "slice-calls" {
+     func slice_lo() {
+         return 1
+     }
+     func slice_hi() {
+         return 3
+     }
+     when app starts {
+         set items = [10, 20, 30, 40]
+         set picked = items[slice_lo():slice_hi()]
+         set tail = items[len(items) - 2:]
+     }
+ }
+ )LOOMWRIGHT");
+    const auto call_result = run_parsed(calls);
+    CHECK_TRUE(call_result.error.empty());
+    CHECK_EQ(call_result.variables.at("picked").to_string(), std::string("[20, 30]"));
+    CHECK_EQ(call_result.variables.at("tail").to_string(), std::string("[30, 40]"));
+}
+
+TEST_CASE(slice_result_is_independent_of_the_source_list) {
+    const Script script = parse(R"LOOMWRIGHT(
+ loom "slice-copy" {
+     when app starts {
+         set source = [1, 2, 3]
+         set part = source[:]
+         call append(part, 4)
+         set part += [9]
+         set grown = part + [5]
+     }
+ }
+ )LOOMWRIGHT");
+    const auto result = run_parsed(script);
+    CHECK_TRUE(result.error.empty());
+    CHECK_EQ(result.variables.at("source").to_string(), std::string("[1, 2, 3]"));
+    CHECK_EQ(result.variables.at("part").to_string(), std::string("[1, 2, 3, 4, 9]"));
+    CHECK_EQ(result.variables.at("grown").to_string(), std::string("[1, 2, 3, 4, 9, 5]"));
+}
+
+TEST_CASE(slice_bounds_may_wait_and_are_evaluated_once) {
+    const Script script = parse(R"LOOMWRIGHT(
+ loom "slice-wait" {
+     func tick() {
+         wait 1ms
+         call append(counter, 1)
+         return len(counter) - 1
+     }
+     when app starts {
+         set items = [10, 20, 30, 40]
+         set counter = []
+         set picked = items[tick():tick()]
+     }
+ }
+ )LOOMWRIGHT");
+    const auto result = run_parsed(script);
+    CHECK_TRUE(result.error.empty());
+    // First tick returns 0 (start), second returns 1 (end): items[0:1].
+    CHECK_EQ(result.variables.at("picked").to_string(), std::string("[10]"));
+    CHECK_EQ(result.variables.at("counter").to_string(), std::string("[1, 1]"));
+}
+
+TEST_CASE(slice_rejects_non_list_bases_and_keeps_index_errors) {
+    CHECK_TRUE(expression_error("42[:]").contains("only a list can be sliced, got int"));
+    CHECK_TRUE(expression_error("\"abc\"[:1]").contains("only a list can be sliced, got str"));
+
+    // A bound is not evaluated when the base is not a list.
+    const Script script = parse(R"LOOMWRIGHT(
+ loom "slice-bad-base" {
+     func tick() {
+         call append(counter, 1)
+         return 0
+     }
+     when app starts {
+         set counter = []
+         set result = 42[tick():]
+     }
+ }
+ )LOOMWRIGHT");
+    const auto result = run_parsed(script);
+    CHECK_TRUE(result.error.contains("only a list can be sliced, got int"));
+    CHECK_EQ(result.variables.at("counter").to_string(), std::string("[]"));
+
+    // Ordinary indexing errors are unchanged.
+    CHECK_TRUE(expression_error("42[0]").contains("only a list can be indexed, got int"));
+    CHECK_TRUE(expression_error("[1, 2][5]").contains("list index out of range"));
+    CHECK_TRUE(expression_error("[1, 2][-3]").contains("list index out of range"));
+    CHECK_EQ(eval_expression("[1, 2][-1]").to_string(), std::string("2"));
+}
+
 TEST_CASE(evaluates_math_helper_functions) {
     CHECK_EQ(eval_expression("pow(2, 10)").to_string(), std::string("1024.0"));
     CHECK_EQ(eval_expression("pow(4, 0.5)").to_string(), std::string("2.0"));

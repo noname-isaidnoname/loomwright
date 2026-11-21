@@ -223,6 +223,10 @@ Lists
     set empty = []
     set first = items[0]           # negative indexes count from the end
     set last = items[-1]
+    set pair = items[0:2]          # slice: ["alpha", "beta"]
+    set head = items[:1]           # ["alpha"]
+    set tail = items[1:]           # ["beta"]
+    set copy = items[:]            # a new list with every element
     set more = items + ["gamma"]   # a new list
     set count = len(items)
 
@@ -230,6 +234,17 @@ A list holds strings, numbers, booleans or other lists. Lists are mutable:
 `call append(items, "gamma")` adds an element in place, and `call sort(items)`
 sorts it. Two lists are equal when they hold the same elements in the same
 order.
+
+A slice `LIST[START:END]` returns a **new** list with the elements from the
+inclusive `START` up to the exclusive `END`. Either bound may be omitted:
+`LIST[:END]` starts at 0, `LIST[START:]` runs to the end, and `LIST[:]` copies
+the whole list. Bounds are full expressions, so `items[i+1:n-1]` works.
+Negative bounds count from the end as they do for indexing, and a bound outside
+the list is clamped rather than raising "index out of range"; if `START` is not
+before `END` the result is an empty list. Both bounds are evaluated once, after
+the base is known to be a list, and may call functions or wait. The result owns
+its own storage, so a later `call append` or `set ... +=` on it never changes
+the source list.
 
 Functions
 ---------
@@ -472,9 +487,10 @@ const std::vector<std::pair<std::string, std::vector<std::string>>>& reference()
           "a == b", "a != b", "a < b", "a <= b", "a > b", "a >= b",
           "a and b", "a or b", "not a", "( EXPR )"}},
         {"lists",
-         {"[VALUE, ...]", "LIST[INDEX]", "len(LIST)", "join(LIST, SEPARATOR)", "split(TEXT, SEPARATOR)",
-          "append(LIST, VALUE)", "sort(LIST)", "contains(LIST, VALUE)", "reverse(LIST_OR_TEXT)",
-          "first(LIST)", "last(LIST)", "count(LIST, VALUE)"}},
+         {"[VALUE, ...]", "LIST[INDEX]", "LIST[START:END]", "LIST[START:]", "LIST[:END]", "LIST[:]",
+          "len(LIST)", "join(LIST, SEPARATOR)", "split(TEXT, SEPARATOR)", "append(LIST, VALUE)",
+          "sort(LIST)", "contains(LIST, VALUE)", "reverse(LIST_OR_TEXT)", "first(LIST)", "last(LIST)",
+          "count(LIST, VALUE)"}},
         {"strings",
          {"upper(TEXT)", "lower(TEXT)", "trim(TEXT)", "title(TEXT)", "reverse(TEXT)",
           "starts_with(TEXT, PREFIX)", "ends_with(TEXT, SUFFIX)", "contains(TEXT, NEEDLE)",

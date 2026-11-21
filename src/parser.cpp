@@ -648,6 +648,18 @@ private:
         }
     }
 
+    /// An omitted slice bound (`LIST[:END]`, `LIST[START:]` or `LIST[:]`) is
+    /// stored as a `none` literal, the same value a missing bound means at
+    /// runtime. It is call-free and cannot wait, so it does not affect the
+    /// parent node's flags.
+    static ExprPtr omitted_bound(int line) {
+        ExprPtr expr = std::make_shared<Expr>();
+        expr->kind = Expr::Kind::Literal;
+        expr->literal = Value::none();
+        expr->line = line;
+        return expr;
+    }
+
     ExprPtr parse_expr(int min_precedence = 0) {
         const Token token = advance();
         ExprPtr left;
@@ -725,16 +737,29 @@ private:
             raise_at("Expected an expression", token);
         }
 
-        // Subscripts bind tighter than any operator: `items[0] + 1`.
+        // Subscripts bind tighter than any operator: `items[0] + 1`. A colon
+        // inside the brackets selects a slice `LIST[START:END]`; either bound
+        // may be omitted. A colon belonging to a ternary in the first
+        // expression is consumed by parse_expr(), so only the top-level colon
+        // is the slice separator and plain indexing keeps its AST shape.
         while (is_value("[")) {
             advance();
-            ExprPtr index = parse_expr();
-            expect("]");
             ExprPtr node = std::make_shared<Expr>();
-            node->kind = Expr::Kind::Index;
-            node->line = index->line;
             node->args.push_back(left);
-            node->args.push_back(index);
+            ExprPtr first = is_value(":") ? ExprPtr{} : parse_expr();
+            if (is_value(":") || !first) {
+                node->kind = Expr::Kind::Slice;
+                node->line = first ? first->line : current().line;
+                node->args.push_back(first ? first : omitted_bound(current().line));
+                advance();  // consume the slice separator
+                node->args.push_back(is_value("]") ? omitted_bound(current().line) : parse_expr());
+                expect("]");
+            } else {
+                node->kind = Expr::Kind::Index;
+                node->line = first->line;
+                node->args.push_back(first);
+                expect("]");
+            }
             propagate_argument_flags(*node);
             left = node;
         }

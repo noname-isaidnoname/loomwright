@@ -63,15 +63,30 @@ variable raises a runtime error.
 ### Expressions
 
 `Expr::Kind` in `src/ast.hpp`: `Literal`, `Variable`, `Unary`, `Binary`,
-`Call`, `List`, `Index`, `Conditional`. Operators are `+ - * / %`, comparisons,
-`and`/`or` (also `&&`/`||`), unary `-`/`+`/`not`/`!`, parentheses, and the
-ternary `COND ? THEN : ELSE`. The ternary is the lowest-precedence operator and
-right-associative; its `args` hold `[condition, then, else]`. Both `eval()` and
-`eval_pure()` evaluate the condition first and then only the selected arm, so an
-unselected arm with side effects or a waiting call never runs.
+`Call`, `List`, `Index`, `Slice`, `Conditional`. Operators are `+ - * / %`,
+comparisons, `and`/`or` (also `&&`/`||`), unary `-`/`+`/`not`/`!`, parentheses,
+the ternary `COND ? THEN : ELSE`, and the list subscript/slice postfixes. The
+ternary is the lowest-precedence operator and right-associative; its `args`
+hold `[condition, then, else]`. Both `eval()` and `eval_pure()` evaluate the
+condition first and then only the selected arm, so an unselected arm with side
+effects or a waiting call never runs.
 `propagate_argument_flags()` marks the whole node `may_wait`/not `call_free`
 when any of the three children is, which keeps the coroutine and borrow paths
 correct.
+
+A subscript `LIST[INDEX]` stays an `Index` node with `[base, index]` in `args`.
+When a top-level `:` appears inside the brackets the parser builds a `Slice`
+with `[base, start, end]` in `args`; an omitted bound (`LIST[START:]`,
+`LIST[:END]`, `LIST[:]`) is stored as a `Literal` holding `none`. A colon that
+belongs to a ternary in the first expression is consumed by `parse_expr()`, so
+`items[flag ? a : b]` is still an `Index` whose child is a `Conditional`. Both
+`eval()` and `eval_pure()` check that the base is a list before evaluating
+either bound, evaluate each bound exactly once (a bound may call a function or
+wait), then call `apply_slice()`. That helper resolves `none` to a default
+(0 for start, list length for end), counts negative bounds from the end, clamps
+every bound into `[0, size]` instead of raising "index out of range", returns an
+empty list when `start >= end`, and always builds a fresh `ListBox` so the
+result is independent of the source list.
 
 ## AST and data model
 
