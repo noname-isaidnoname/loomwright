@@ -223,8 +223,9 @@ set picked = enabled ? first(items) : last(items)  # only one arm runs
 ```
 
 `COND ? THEN : ELSE` uses the same truthiness as `if`, evaluates only the
-selected arm, and groups right to left. See `loomwright --docs expressions` for
-the full operator list.
+selected arm, and groups right to left. The false values are `0`, `0.0`,
+`false`, `""`, `[]`, and `none`; everything else is true. See
+`loomwright --docs expressions` for the full operator list.
 
 ### Lists
 

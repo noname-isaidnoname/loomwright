@@ -27,7 +27,9 @@ public:
     /// copy of the list.
     std::vector<Value>& values();
     const std::vector<Value>& values() const;
-    /// True when the box holds no list at all.
+    /// True when the box holds no list at all. This is NOT the same as an
+    /// empty list: `Value::of_list({})` allocates storage for zero elements.
+    /// Use `values().empty()` to count the elements.
     bool empty() const { return storage_ == nullptr; }
 
 private:

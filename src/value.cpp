@@ -149,7 +149,7 @@ bool Value::truthy() const {
         case Type::Float: return real != 0.0;
         case Type::Bool: return boolean;
         case Type::Str: return !text.empty();
-        case Type::List: return !items.empty();
+        case Type::List: return !items.values().empty();
     }
     return false;
 }

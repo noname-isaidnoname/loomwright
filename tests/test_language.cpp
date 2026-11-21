@@ -483,6 +483,26 @@ TEST_CASE(formats_values_in_the_language_style) {
     CHECK_EQ(Value::of_str("a\nb").repr(), std::string("\"a\\nb\""));
 }
 
+TEST_CASE(value_truthiness_treats_empty_list_as_false) {
+    // The false values: none, false, zero, an empty string, an empty list.
+    CHECK_TRUE(!Value::none().truthy());
+    CHECK_TRUE(!Value::of_bool(false).truthy());
+    CHECK_TRUE(!Value::of_int(0).truthy());
+    CHECK_TRUE(!Value::of_float(0.0).truthy());
+    CHECK_TRUE(!Value::of_str("").truthy());
+    CHECK_TRUE(!Value::of_list({}).truthy());
+    // A non-empty list and the other truthy values stay true.
+    CHECK_TRUE(Value::of_bool(true).truthy());
+    CHECK_TRUE(Value::of_int(1).truthy());
+    CHECK_TRUE(Value::of_str("x").truthy());
+    CHECK_TRUE(Value::of_list({Value::of_int(1)}).truthy());
+    // An empty list still owns storage: list_items() returns an empty vector
+    // and repr() prints "[]". ListBox::empty() only means "no storage at all".
+    CHECK_TRUE(!Value::of_list({}).items.empty());
+    CHECK_TRUE(Value::of_list({}).list_items().empty());
+    CHECK_EQ(Value::of_list({}).repr(), std::string("[]"));
+}
+
 TEST_CASE(parses_list_literals_and_subscripts) {
     const Script script = parse(R"LOOMWRIGHT(
 loom "lists" {

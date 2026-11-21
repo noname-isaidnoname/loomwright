@@ -472,7 +472,7 @@ TEST_CASE(evaluates_ternary_truthiness_and_pure_path) {
     CHECK_EQ(eval_expression("0 ? 1 : 2").to_string(), std::string("2"));
     CHECK_EQ(eval_expression("0.0 ? 1 : 2").to_string(), std::string("2"));
     CHECK_EQ(eval_expression("\"\" ? 1 : 2").to_string(), std::string("2"));
-    CHECK_EQ(eval_expression("[] ? 1 : 2").to_string(), std::string("1"));  // a list value is truthy even when empty
+    CHECK_EQ(eval_expression("[] ? 1 : 2").to_string(), std::string("2"));  // an empty list is falsy
     CHECK_EQ(eval_expression("[0] ? 1 : 2").to_string(), std::string("1"));
     CHECK_EQ(eval_expression("1 or 0 ? 2 : 3").to_string(), std::string("2"));
     CHECK_EQ(eval_expression("0 and 1 ? 2 : 3").to_string(), std::string("3"));
@@ -501,7 +501,41 @@ loom "ternary-truth" {
     CHECK_TRUE(result.error.empty());
     CHECK_EQ(result.variables.at("from_none").to_string(), std::string("2"));
     CHECK_EQ(result.variables.at("from_empty").to_string(), std::string("2"));
-    CHECK_EQ(result.variables.at("from_empty_list").to_string(), std::string("1"));
+    CHECK_EQ(result.variables.at("from_empty_list").to_string(), std::string("2"));
+}
+
+TEST_CASE(empty_list_is_falsy_in_conditions_and_boolean_operators) {
+    CHECK_EQ(eval_expression("bool([])").to_string(), std::string("false"));
+    CHECK_EQ(eval_expression("bool([1])").to_string(), std::string("true"));
+    CHECK_EQ(eval_expression("not []").to_string(), std::string("true"));
+    CHECK_EQ(eval_expression("[] ? \"then\" : \"else\"").to_string(), std::string("else"));
+    CHECK_EQ(eval_expression("[1] ? \"then\" : \"else\"").to_string(), std::string("then"));
+    // A falsy list short-circuits `and` and lets `or` evaluate its right arm.
+    CHECK_EQ(eval_expression("[] and 1 % 0").to_string(), std::string("false"));
+    CHECK_EQ(eval_expression("[] or 7").to_string(), std::string("true"));
+
+    const Script script = parse(R"LOOMWRIGHT(
+loom "empty-list-falsy" {
+    func nothing() {
+        return
+    }
+    when app starts {
+        if [] {
+            set branch = "then"
+        } else {
+            set branch = "else"
+        }
+        set no_value = nothing()
+        set none_bool = bool(no_value)
+        set none_ternary = no_value ? "then" : "else"
+    }
+}
+)LOOMWRIGHT");
+    const auto result = run_parsed(script);
+    CHECK_TRUE(result.error.empty());
+    CHECK_EQ(result.variables.at("branch").to_string(), std::string("else"));
+    CHECK_EQ(result.variables.at("none_bool").to_string(), std::string("false"));
+    CHECK_EQ(result.variables.at("none_ternary").to_string(), std::string("else"));
 }
 
 TEST_CASE(ternary_is_lazy_and_keeps_branch_errors_identical) {

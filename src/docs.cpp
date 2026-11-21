@@ -58,7 +58,9 @@ The no value is written `none`; a function without a result returns it.
     log [1, 2]     # [1, 2]
 
 `str(x)` is the plain text of a value and `bool(x)` its truthiness. A float
-keeps a fractional part in its text, so `str(1.0)` is `1.0`.
+keeps a fractional part in its text, so `str(1.0)` is `1.0`. The false values
+are 0, 0.0, false, "", the empty list `[]`, and no value; everything else is
+true.
 
 Event triggers
 --------------
@@ -266,8 +268,8 @@ concatenate and `%=` uses the same remainder rule. The variable must already
 exist; a compound assignment to an undefined name is a runtime error.
 
 The ternary expression `COND ? THEN : ELSE` uses the same truthiness as `if`:
-0, 0.0, false, "", and no value are false; everything else — including an
-empty list — is true. It is **lazy**: only the selected arm is evaluated, so an
+0, 0.0, false, "", the empty list `[]`, and no value are false; everything
+else is true. It is **lazy**: only the selected arm is evaluated, so an
 unselected arm can contain a failing or waiting function without any effect.
 `? :` binds more loosely than every other operator and groups right to left, so
 `a ? b : c ? d : e` means `a ? b : (c ? d : e)`. Use parentheses to group the

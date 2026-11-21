@@ -84,10 +84,14 @@ correct.
 - `Function` — name, params, body, line.
 - `GuiPanel` / `GuiWidget` — persistent panel declarations.
 - `Remap` — source and target key/chord.
-- `Value` — int/double/bool/string with `repr`/`str` formatting and
+- `Value` — int/double/bool/string/list/none with `repr`/`str` formatting and
   truthiness. `str()` prints `none`, `true`, `false`, the number, the string
   itself, or a bracketed list; `repr()` additionally quotes and escapes
   strings. Floats use the shortest round-trip text (`1.5`, `1.0`, `1e+16`).
+  Falsy values are `none`, `false`, `0`, `0.0`, `""`, and the empty list `[]`;
+  everything else is truthy. `ListBox::empty()` means "no list storage", which
+  is distinct from an empty list: `Value::of_list({})` has storage with zero
+  elements and is falsy. `Value::truthy()` uses `items.values().empty()`.
 
 ## Statement dispatch
 
