@@ -27,6 +27,21 @@ std::string expression_error(const std::string& expression) {
     return runtime.runtime_error();
 }
 
+/// The variables and error text after running a sequence of statements.
+struct StatementResult {
+    VariableMap variables;
+    std::string error;
+};
+
+StatementResult run_statements(const std::string& body) {
+    Script script = parse("loom \"statements\" { when app starts { " + body + " } }");
+    Runtime runtime(script, Runtime::Options{});
+    runtime.set_backend(std::make_unique<RecordingBackend>());
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
+    runtime.scheduler().run();
+    return StatementResult{runtime.variables(), runtime.runtime_error()};
+}
+
 }  // namespace
 
 
@@ -336,6 +351,116 @@ TEST_CASE(list_and_string_access_helpers_report_empty_and_type_errors) {
     CHECK_TRUE(expression_error("reverse(42)").contains("reverse() expects a list or a string"));
     CHECK_TRUE(expression_error("title(42)").contains("title() expects a string"));
     CHECK_TRUE(expression_error("contains(42, 2)").contains("contains() expects a string, got"));
+}
+
+TEST_CASE(compound_set_applies_every_arithmetic_operator) {
+    const auto result = run_statements(R"LOOM(
+        set n = 10
+        set n += 5
+        set after_add = n
+        set n -= 3
+        set after_subtract = n
+        set n *= 2
+        set after_multiply = n
+        set n /= 4
+        set after_divide = n
+        set n %= 3
+        set after_modulo = n
+        set k = 7
+        set k %= 4
+        set int_modulo = k
+    )LOOM");
+    CHECK_TRUE(result.error.empty());
+    CHECK_EQ(result.variables.at("after_add").to_string(), std::string("15"));
+    CHECK_EQ(result.variables.at("after_subtract").to_string(), std::string("12"));
+    CHECK_EQ(result.variables.at("after_multiply").to_string(), std::string("24"));
+    CHECK_EQ(result.variables.at("after_divide").to_string(), std::string("6.0"));
+    CHECK_EQ(result.variables.at("after_modulo").to_string(), std::string("0.0"));
+    CHECK_EQ(result.variables.at("int_modulo").to_string(), std::string("3"));
+}
+
+TEST_CASE(compound_set_concatenates_strings_and_lists) {
+    const auto result = run_statements(R"LOOM(
+        set text = "hello"
+        set text += " world"
+        set items = [1, 2]
+        set items += [3]
+        set original = [1, 2]
+        set alias = original
+        set original += [3]
+    )LOOM");
+    CHECK_TRUE(result.error.empty());
+    CHECK_EQ(result.variables.at("text").to_string(), std::string("hello world"));
+    CHECK_EQ(result.variables.at("items").to_string(), std::string("[1, 2, 3]"));
+    // Like `items = items + [3]`, `+=` builds a new list instead of mutating
+    // the shared storage of the previous value.
+    CHECK_EQ(result.variables.at("original").to_string(), std::string("[1, 2, 3]"));
+    CHECK_EQ(result.variables.at("alias").to_string(), std::string("[1, 2]"));
+}
+
+TEST_CASE(compound_set_keeps_expression_errors_and_undefined_variables) {
+    const auto undefined = run_statements("set missing += 1");
+    CHECK_TRUE(undefined.error.contains("cannot use compound assignment on undefined variable \"missing\""));
+
+    const auto division = run_statements("set n = 10\nset n /= 0");
+    CHECK_TRUE(division.error.contains("Division by zero"));
+    const auto modulo = run_statements("set n = 10\nset n %= 0");
+    CHECK_TRUE(modulo.error.contains("Division by zero"));
+    const auto wrong_type = run_statements("set text = \"a\"\nset text -= \"b\"");
+    CHECK_TRUE(wrong_type.error.contains("unsupported operand type(s) for -"));
+}
+
+TEST_CASE(plain_set_keeps_its_original_behavior) {
+    const auto result = run_statements(R"LOOM(
+        set fresh = 1
+        set fresh = "text"
+        set fresh = [1, 2]
+        set fresh = fresh + [3]
+    )LOOM");
+    CHECK_TRUE(result.error.empty());
+    CHECK_EQ(result.variables.at("fresh").to_string(), std::string("[1, 2, 3]"));
+}
+
+TEST_CASE(compound_set_uses_the_function_scope) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "scope" {
+    func bump() {
+        set local = 5
+        set local += 2
+        return local
+    }
+    when app starts {
+        set result = bump()
+    }
+}
+)LOOMWRIGHT");
+    Runtime runtime(script, Runtime::Options{});
+    runtime.set_backend(std::make_unique<RecordingBackend>());
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
+    runtime.scheduler().run();
+    CHECK_TRUE(runtime.runtime_error().empty());
+    CHECK_EQ(runtime.variables().at("result").to_string(), std::string("7"));
+}
+
+TEST_CASE(compound_set_accepts_a_waiting_rhs) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "waiting-rhs" {
+    func delayed_value() {
+        wait 1ms
+        return 5
+    }
+    when app starts {
+        set n = 10
+        set n += delayed_value()
+    }
+}
+)LOOMWRIGHT");
+    Runtime runtime(script, Runtime::Options{});
+    runtime.set_backend(std::make_unique<RecordingBackend>());
+    runtime.scheduler().spawn(runtime.run_event(script.events.at(0)));
+    runtime.scheduler().run();
+    CHECK_TRUE(runtime.runtime_error().empty());
+    CHECK_EQ(runtime.variables().at("n").to_string(), std::string("15"));
 }
 
 TEST_CASE(lists_are_mutable_and_compare_by_value) {

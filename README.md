@@ -211,7 +211,7 @@ Run `loomwright --docs` for the full guide. Useful topics: `events`, `pointer`, 
 | Mouse | hold/free/tap with independent tokens |
 | Keyboard | press/free/tap chords, `type`, AHK-style `send`, native `remap`, `consume key` |
 | Desktop | scroll, clipboard, notifications, opt-in launch, active-window queries, GUI dialogs/panels |
-| Flow | variables, expressions, if/else if, for/repeat/while, break/continue, wait, assert, log |
+| Flow | variables, compound `set` (`+=`, `-=`, `*=`, `/=`, `%=`), expressions, if/else if, for/repeat/while, break/continue, wait, assert, log |
 | Data | lists with literals, indexing, `split`/`join`/`sort`/`append`/`reverse`/`count`, string helpers, `sum`/`avg` |
 | Functions | user-defined `func` with parameters and `return` |
 
@@ -252,7 +252,12 @@ func double(x) {
     return x * 2
 }
 set value = double(21)   # 42
+set value += 8           # 50; also -=, *=, /= and %=
 ```
+
+`set NAME += EXPR` (and the other compound forms) reads the current value,
+applies the same operator as the matching expression, and writes the result
+back. The variable must already exist; string and list `+=` concatenate.
 
 `break` and `continue` work in `for`, `repeat`, and `while` loops. A `func`
 declaration lives at the top level of the `loom` block. A function has its own

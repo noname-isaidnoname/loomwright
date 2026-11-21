@@ -157,6 +157,9 @@ private:
     /// Write a variable into the innermost function scope, or into the script
     /// scope when no function is running.
     void assign_variable(const std::string& name, Value value);
+    /// Apply a compound `set` operator to `node.a` with the evaluated RHS.
+    /// Plain assignments keep using assign_variable() directly.
+    void apply_compound_set(const Node& node, const Value& right);
     std::map<std::string, std::string> active_window_info() const;
     void gui_alert(const std::string& message, const std::string& title);
     std::string gui_input(const std::string& prompt, const std::string& default_value, const std::string& title);

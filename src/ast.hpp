@@ -35,6 +35,10 @@ enum class BinaryOp {
 /// The unary operators the language exposes.
 enum class UnaryOp { Negate, Plus, Not };
 
+/// How a `set` statement updates its variable. `Assign` is the plain
+/// `set NAME = EXPR`; the rest are the compound forms such as `+=`.
+enum class SetOp : unsigned char { Assign, Add, Subtract, Multiply, Divide, Modulo };
+
 /// An expression tree. `Literal` carries a value; `Variable`, `Unary` and
 /// `Binary` carry a name/operator; `Call` carries its function name and args;
 /// `List` carries its element expressions; `Index` carries a base and an index.
@@ -139,6 +143,7 @@ struct Node {
     std::string a;  // cursor action / mouse button / key chord / variable name
     std::string b;  // mouse action / key action / clip action
     std::string c;  // hold token
+    SetOp set_op = SetOp::Assign;  // `set` assignment operator
     std::vector<ExprPtr> exprs;
     bool has_duration = false;
     double duration = 0.0;

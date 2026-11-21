@@ -466,7 +466,19 @@ private:
         if (accept("set")) {
             node.stmt = StmtKind::Set;
             node.a = expect_kind(TokenKind::Ident).value.to_string();
-            expect("=");
+            if (accept("+=")) {
+                node.set_op = SetOp::Add;
+            } else if (accept("-=")) {
+                node.set_op = SetOp::Subtract;
+            } else if (accept("*=")) {
+                node.set_op = SetOp::Multiply;
+            } else if (accept("/=")) {
+                node.set_op = SetOp::Divide;
+            } else if (accept("%=")) {
+                node.set_op = SetOp::Modulo;
+            } else {
+                expect("=");
+            }
             node.exprs.push_back(parse_expr());
             end_statement();
             return node;

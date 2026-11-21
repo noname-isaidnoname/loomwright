@@ -1160,7 +1160,11 @@ void Runtime::run_action(const Node& node, Value& first, const Value& second,
             launch_program(first.to_string());
             break;
         case StmtKind::Set:
-            assign_variable(node.a, std::move(first));
+            if (node.set_op == SetOp::Assign) {
+                assign_variable(node.a, std::move(first));
+            } else {
+                apply_compound_set(node, first);
+            }
             break;
         case StmtKind::Break:
             if (loop_depth_ == 0) throw RuntimeErrorLoomwright("break outside a loop");
@@ -1200,9 +1204,15 @@ void Runtime::run_action(const Node& node, Value& first, const Value& second,
 /// statement runs in the caller's stack frame.
 void Runtime::execute_pure(const Node& node, const EventContext& context) {
     switch (node.stmt) {
-        case StmtKind::Set:
-            assign_variable(node.a, eval_pure(*node.exprs.at(0), context));
+        case StmtKind::Set: {
+            Value right = eval_pure(*node.exprs.at(0), context);
+            if (node.set_op == SetOp::Assign) {
+                assign_variable(node.a, std::move(right));
+            } else {
+                apply_compound_set(node, right);
+            }
             break;
+        }
         case StmtKind::If: {
             const Value condition = eval_pure(*node.exprs.at(0), context);
             execute_nodes_pure(condition.truthy() ? node.body : node.otherwise, context);
@@ -1527,6 +1537,26 @@ void Runtime::assign_variable(const std::string& name, Value value) {
         return;
     }
     target = std::move(value);
+}
+
+void Runtime::apply_compound_set(const Node& node, const Value& right) {
+    BinaryOp op = BinaryOp::Add;
+    switch (node.set_op) {
+        case SetOp::Add: op = BinaryOp::Add; break;
+        case SetOp::Subtract: op = BinaryOp::Subtract; break;
+        case SetOp::Multiply: op = BinaryOp::Multiply; break;
+        case SetOp::Divide: op = BinaryOp::Divide; break;
+        case SetOp::Modulo: op = BinaryOp::Modulo; break;
+        case SetOp::Assign: return;  // Plain assignments never reach this helper.
+    }
+    const Value* current = lookup_variable(node.a);
+    if (current == nullptr) {
+        throw RuntimeErrorLoomwright("cannot use compound assignment on undefined variable " +
+                                     quote_string(node.a));
+    }
+    // Reuse the expression evaluator's binary semantics: string/list `+`,
+    // numeric coercion and division-by-zero errors behave exactly as in `a + b`.
+    assign_variable(node.a, apply_binary(op, *current, right));
 }
 
 Task Runtime::call_user_function(const Function& function, std::vector<Value> args, const EventContext& context,

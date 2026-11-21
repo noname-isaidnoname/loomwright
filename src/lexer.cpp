@@ -221,7 +221,10 @@ std::vector<Token> tokenize(const std::string& source) {
             continue;
         }
 
-        static const char* const kDoubleOperators[] = {"==", "!=", "<=", ">=", "&&", "||"};
+        // Compound assignment is lexed as one token so `set x += 1` cannot be
+        // mistaken for `set x + = 1`. Plain `=` stays a single-character op.
+        static const char* const kDoubleOperators[] = {"==", "!=", "<=", ">=", "&&", "||",
+                                                       "+=", "-=", "*=", "/=", "%="};
         bool matched = false;
         for (const char* op : kDoubleOperators) {
             if (source.compare(position, 2, op) == 0) {

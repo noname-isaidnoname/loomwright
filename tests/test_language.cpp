@@ -640,6 +640,65 @@ loom "arity" {
     CHECK_TRUE(has_message_containing(diagnostics, "Function sum() takes 1 argument(s), got 0"));
 }
 
+TEST_CASE(lexer_recognizes_compound_assignment_operators) {
+    for (const char* op : {"+=", "-=", "*=", "/=", "%=", "="}) {
+        const auto tokens = tokenize(std::string("set total ") + op + " 1");
+        std::vector<std::string> ops;
+        for (const auto& token : tokens) {
+            if (token.kind == TokenKind::Op) ops.push_back(token.value.to_string());
+        }
+        // A compound assignment is one token, never `+` followed by `=`.
+        CHECK_EQ(ops, std::vector<std::string>({op}));
+    }
+}
+
+TEST_CASE(parses_compound_set_statements) {
+    const Script script = parse(R"LOOMWRIGHT(
+loom "compound" {
+    when app starts {
+        set a = 10
+        set a += 2
+        set a -= 3
+        set a *= 4
+        set a /= 5
+        set a %= 6
+    }
+}
+)LOOMWRIGHT");
+    const auto& body = script.events.at(0).body;
+    CHECK_EQ(body.size(), size_t(6));
+    CHECK_TRUE(body.at(0).stmt == StmtKind::Set);
+    CHECK_TRUE(body.at(0).set_op == SetOp::Assign);
+    CHECK_EQ(body.at(0).a, std::string("a"));
+    CHECK_TRUE(body.at(1).set_op == SetOp::Add);
+    CHECK_TRUE(body.at(2).set_op == SetOp::Subtract);
+    CHECK_TRUE(body.at(3).set_op == SetOp::Multiply);
+    CHECK_TRUE(body.at(4).set_op == SetOp::Divide);
+    CHECK_TRUE(body.at(5).set_op == SetOp::Modulo);
+    for (const auto& node : body) CHECK_EQ(node.exprs.size(), size_t(1));
+}
+
+TEST_CASE(static_check_accepts_compound_set_and_rejects_malformed) {
+    const Script valid = parse(R"LOOMWRIGHT(
+loom "compound" {
+    when app starts {
+        set n = 5
+        set n += 2
+        set n -= 1
+        set n *= 3
+        set n /= 2
+        set n %= 4
+    }
+}
+)LOOMWRIGHT");
+    CHECK_TRUE(!has_error(check_script(valid)));
+
+    CHECK_THROWS(parse("loom \"bad\" { when app starts { set n + 1 } }"), ParseError);
+    CHECK_THROWS(parse("loom \"bad\" { when app starts { set n += } }"), ParseError);
+    CHECK_THROWS(parse("loom \"bad\" { when app starts { set n += 1 2 } }"), ParseError);
+    CHECK_THROWS(parse("loom \"bad\" { when app starts { set 1 += 2 } }"), ParseError);
+}
+
 TEST_CASE(static_check_rejects_duplicate_and_shadowing_functions) {
     const Script script = parse(R"LOOMWRIGHT(
 loom "dupes" {

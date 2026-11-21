@@ -179,6 +179,8 @@ Actions
     launch "gnome-calculator"      # requires option allow_launch = true
 
     set count = 3
+    set count += 2          # same as: set count = count + 2
+    set count -= 1          # also *=, /= and %=
     if count > 1 {
         log "many"
     } else if count == 1 {
@@ -255,6 +257,12 @@ Expressions and built-in functions
 
 Variables: screen_width, screen_height, event_key, event_edge, plus names
 created with `set` or `clip read into`.
+
+A `set` can also update an existing variable with `+=`, `-=`, `*=`, `/=` or
+`%=`. `set NAME += EXPR` reads the current value, applies the same operator as
+the `+` expression and writes the result back, so string and list `+=`
+concatenate and `%=` uses the same remainder rule. The variable must already
+exist; a compound assignment to an undefined name is a runtime error.
 
 Functions: min(a,b,...), max(a,b,...), abs(x), round(x), floor(x), ceil(x),
 sqrt(x), pow(base, exponent), sign(x), gcd(a, b), lcm(a, b), sum(list),
@@ -441,7 +449,9 @@ const std::vector<std::pair<std::string, std::vector<std::string>>>& reference()
          {"scroll X, Y", "clip write EXPR", "clip read into VARIABLE", "notify EXPR",
           "launch EXPR (allow_launch=true required)"}},
         {"flow",
-         {"set NAME = EXPR", "if EXPR { ... } else if EXPR { ... } else { ... }", "repeat EXPR { ... }",
+         {"set NAME = EXPR", "set NAME += EXPR", "set NAME -= EXPR", "set NAME *= EXPR",
+          "set NAME /= EXPR", "set NAME %= EXPR",
+          "if EXPR { ... } else if EXPR { ... } else { ... }", "repeat EXPR { ... }",
           "while EXPR { ... }", "for NAME = START to END { ... }", "for NAME = START downto END { ... }",
           "for NAME = START to END step STEP { ... }", "for NAME in LIST { ... }",
           "break", "continue", "wait DURATION", "assert EXPR", "log EXPR",

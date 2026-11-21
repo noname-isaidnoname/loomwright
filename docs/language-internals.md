@@ -53,6 +53,13 @@ handler is the primary key.
 `ClipWrite`, `ClipRead`, `Launch`, `Set`, `If`, `Repeat`, `While`, `For`,
 `Break`, `Continue`, `Assert`, `Call`, `Return`, `Send`.
 
+An assignment is `set NAME = EXPR` or `set NAME OP= EXPR` with `OP` one of
+`+ - * / %`. The parser records the compound form in `Node::set_op` (`SetOp`).
+`Runtime::apply_compound_set()` reads the current value, reuses `apply_binary()`
+— the same helper that evaluates expression `Binary` nodes — and writes the
+result through `assign_variable()`. A compound assignment to an undefined
+variable raises a runtime error.
+
 ### Expressions
 
 `Expr::Kind` in `src/ast.hpp`: `Literal`, `Variable`, `Unary`, `Binary`,
@@ -64,7 +71,7 @@ handler is the primary key.
 - `Script` — name, path, options, events, remaps, panels, functions.
 - `Node` — one statement or event block. Flat fields keep the node
   tuple-style: event fields (`event_kind`, `event_key`, `chord_parts`,
-  `edge`, `interval`) and statement fields (`a`, `b`, `c`, `exprs`,
+  `edge`, `interval`) and statement fields (`a`, `b`, `c`, `set_op`, `exprs`,
   `has_duration`, `duration`, `body`, `otherwise`, `line`).
 - `Expr` — expression tree; `ExprPtr` is a `shared_ptr`.
 - `Function` — name, params, body, line.
