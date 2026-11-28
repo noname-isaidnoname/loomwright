@@ -39,7 +39,7 @@ Internal docs live in `docs/`; start at [`docs/README.md`](docs/README.md) and r
 
 ## Publishing a release
 
-The phrase `publish release` (or "ship what we just did") is enough to run this
+The phrase `publish release` (or "ship what we just did" or similar phrasing) is enough to run this
 whole flow without further prompting. It is only appropriate when **there are
 commits not yet covered by a release** (unpushed commits on `main`, or pushed
 commits newer than the latest release tag) **and the source version has been
