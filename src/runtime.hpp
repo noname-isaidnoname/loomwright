@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <map>
@@ -84,7 +85,9 @@ public:
     void disconnect_device(const std::string& path);
     void process_events(const std::vector<RawEvent>& events, EventSink* sink, const std::string& path,
                         const std::function<std::vector<int>()>& snapshot = {});
-    Task held_loop(Node event, std::string key, double interval);
+    /// `ticket` distinguishes successive held tasks that reuse the same
+    /// (key, line) identity after a rapid re-press.
+    Task held_loop(Node event, std::string key, double interval, std::uint64_t ticket = 0);
 
 private:
     struct EventContext {
@@ -193,7 +196,12 @@ private:
     std::map<std::string, int> button_refs_;
     std::map<std::string, int> key_refs_;
     int tap_counter_ = 0;
-    std::map<std::pair<std::string, int>, Task::handle_type> held_tasks_;
+    struct HeldTask {
+        Task::handle_type handle;
+        std::uint64_t ticket = 0;
+    };
+    std::map<std::pair<std::string, int>, HeldTask> held_tasks_;
+    std::uint64_t held_ticket_ = 0;
     std::map<std::string, std::vector<std::string>> active_remaps_;
     bool suspended_hotkeys_ = false;
     std::set<std::string> disabled_hotkeys_;

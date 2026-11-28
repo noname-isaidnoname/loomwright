@@ -102,7 +102,9 @@ Persistent GUI panels
         call gui_set_text("apply", "Applied")
     }
 
-Panels use X11 or Xwayland. Inputs and buttons have unique script-wide IDs.
+Panels use native Wayland in a Wayland session when built with GTK3 and
+wayland-client, otherwise X11/Xwayland. Inputs and buttons have unique
+script-wide IDs.
 `gui_value(id)` reads an input, `gui_set_text(id, text)` updates an input or
 button, and `gui_set_visible(title, boolean)` shows or hides a panel. Closing a
 panel stops the script unless a `when gui window closes` handler is declared.
@@ -366,11 +368,14 @@ Safety and runtime behavior
 * `remap key SOURCE to TARGET` is script-wide and source consumption uses the
   same keyboard-grab rules as `consume key SOURCE`; the panic key cannot be
   remapped.
-* `active_window_title()`, `active_window_class()`, `active_window_process()`,
-  and `active_window_pid()` query the active window through `xdotool` or
-  `kdotool`, reading the process name from `/proc/<pid>/comm`. They are
-  read-only. If no supported query tool is present, string functions return an
-  empty string and `active_window_pid()` returns 0.
+* `active_window_title()` and `active_window_class()` read the activated
+  toplevel from the compositor's `zwlr_foreign_toplevel_manager_v1` protocol in
+  a Wayland session, and fall back to `xdotool` or `kdotool` (which also work
+  for XWayland windows). `active_window_pid()` needs a PID from those tools;
+  Wayland has no toplevel PID, and `active_window_process()` reads
+  `/proc/<pid>/comm`. They are read-only. If neither the protocol nor a query
+  tool is available, string functions return an empty string and
+  `active_window_pid()` returns 0.
 * `gui_alert`, `gui_input`, and `gui_confirm` use `zenity`, `kdialog`, or
   `yad` and are modal dialogs, not a modeless AHK `Gui` object model. Closing
   an input dialog returns an empty string; answering a confirm dialog with
@@ -383,7 +388,9 @@ Safety and runtime behavior
 * `--check` parses and statically checks a script without opening input devices.
 * Panels use native Wayland in a Wayland session when built with GTK3 and
   wayland-client; otherwise auto uses X11/Xwayland. Explicit "wayland" and
-  "x11" require their respective displays. The standalone picker still uses X11.
+  "x11" require their respective displays. The standalone picker detects the
+  session the same way: native Wayland overlay on Wayland, X11/Xwayland when
+  DISPLAY is set, and a clear error when neither is available.
 * `--dry-run` logs actions and sees physical keys without changing what the
   input broker suppresses.
 * `--input-mode direct` bypasses the broker for standalone runs. Do not mix it
@@ -394,12 +401,20 @@ Safety and runtime behavior
   text and dry-run output stay with each script's own backend.
 * `--get-mouse-pos` captures the desktop with spectacle, grim,
   gnome-screenshot, scrot, or ImageMagick import, then shows that still image
-  full-screen in an XWayland overlay with a live coordinate tooltip. Left-click
-  consumes the click, prints `x, y`, and exits; right-click cancels (Esc works
-  when the overlay has focus). It needs X11 and a screenshot tool, not evdev
-  or /dev/uinput permissions.
-* `--doctor` reports input devices, ydotool, uinput, X11/Wayland and screen
-  prerequisites.
+  full-screen with a live coordinate tooltip. The overlay is a native Wayland
+  fullscreen window in a Wayland session (GTK3 + wayland-client) and a managed
+  X11 window when DISPLAY is set. Left-click prints `x, y` and exits;
+  right-click cancels (Esc works when the overlay has focus). It needs a
+  screenshot tool and a display, not evdev or /dev/uinput permissions. Wayland
+  has no global pointer query, so coordinates come from pointer events on the
+  overlay, which cover the output it is fullscreen on.
+* `--doctor` reports input devices, ydotool, uinput, the picker backend, the
+  active-window sources and screen prerequisites.
+* `--broker` lists the scripts connected to the shared input broker, the
+  devices it watches, the keys they consume or hold, and any conflicts. A
+  conflict names the scripts and device: two scripts consuming the same key on
+  one physical device, or two scripts holding the same synthetic key/button.
+  It only reads broker state and does not start the broker or change claims.
 
 Linux backends
 --------------
@@ -486,6 +501,7 @@ const std::vector<std::pair<std::string, std::vector<std::string>>>& reference()
           "gui_confirm(QUESTION [, TITLE])", "suspend_hotkeys(BOOL)", "hotkeys_suspended()",
           "set_hotkey_enabled(NAME, BOOL)", "hotkey_enabled(NAME)"}},
         {"input", {"consume key NAME (shared by default; release held inputs before a new grab)"}},
+        {"cli", {"loomwright --broker (list connected scripts, devices, claims and conflicts)"}},
         {"options", {"option compositor = \"auto\" | \"x11\" | \"wayland\" (panel backend)"}},
         {"desktop",
          {"scroll X, Y", "clip write EXPR", "clip read into VARIABLE", "notify EXPR",

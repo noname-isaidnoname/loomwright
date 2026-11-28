@@ -1,14 +1,52 @@
 #include "runtime.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <fstream>
 
 #include "errors.hpp"
 #include "subprocess.hpp"
+#include "wayland_native.hpp"
 
 
 namespace loomwright {
 namespace {
+
+std::string trim_line_endings(const std::string& text) {
+    std::string value = text;
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' ||
+                              value.back() == '\t')) {
+        value.pop_back();
+    }
+    return value;
+}
+
+bool is_pid(const std::string& value) {
+    return !value.empty() &&
+           std::all_of(value.begin(), value.end(), [](char c) static {
+               return std::isdigit(static_cast<unsigned char>(c)) != 0;
+           });
+}
+
+/// Fill only the fields the earlier source did not provide. Both xdotool and
+/// kdotool speak to a window manager; kdotool works on native KDE Wayland.
+void fill_from_window_tool(const std::string& executable, std::map<std::string, std::string>& info) {
+    const CommandResult active = run_command({executable, "getactivewindow"}, std::string(), 250);
+    const std::string id = trim_line_endings(active.out);
+    if (active.returncode != 0 || id.empty()) return;
+
+    const auto query = [&](const char* option) {
+        const CommandResult result = run_command({executable, option, id}, std::string(), 250);
+        return result.returncode == 0 ? trim_line_endings(result.out) : std::string();
+    };
+    if (info["title"].empty()) info["title"] = query("getwindowname");
+    if (info["class"].empty()) info["class"] = query("getwindowclassname");
+    if (info["pid"].empty()) {
+        const std::string pid = query("getwindowpid");
+        if (is_pid(pid)) info["pid"] = pid;
+    }
+}
 
 }  // namespace
 
@@ -146,86 +184,16 @@ std::map<std::string, std::string> Runtime::active_window_info() const {
     info["pid"] = std::string();
     info["process"] = std::string();
 
-    const std::string xdotool = which("xdotool");
-    if (!xdotool.empty()) {
-        const CommandResult window_id = run_command({xdotool, "getactivewindow"}, std::string(), 250);
-        if (window_id.returncode == 0) {
-            std::string id = window_id.out;
-            while (!id.empty() && (id.back() == '\n' || id.back() == '\r' || id.back() == ' ' || id.back() == '\t')) {
-                id.pop_back();
-            }
-            if (!id.empty()) {
-                const CommandResult title = run_command({xdotool, "getwindowname", id}, std::string(), 250);
-                if (title.returncode == 0) {
-                    std::string value = title.out;
-                    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) value.pop_back();
-                    info["title"] = value;
-                }
-                const CommandResult window_class = run_command({xdotool, "getwindowclassname", id}, std::string(), 250);
-                if (window_class.returncode == 0) {
-                    std::string value = window_class.out;
-                    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) value.pop_back();
-                    info["class"] = value;
-                }
-                const CommandResult pid = run_command({xdotool, "getwindowpid", id}, std::string(), 250);
-                if (pid.returncode == 0) {
-                    std::string value = pid.out;
-                    while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' ||
-                                             value.back() == '\t')) {
-                        value.pop_back();
-                    }
-                    if (!value.empty() &&
-                        std::all_of(value.begin(), value.end(), [](char c) static {
-                            return std::isdigit(static_cast<unsigned char>(c)) != 0;
-                        })) {
-                        info["pid"] = value;
-                    }
-                }
-            }
-        }
-    }
+    const char* session = std::getenv("XDG_SESSION_TYPE");
+    const char* wayland = std::getenv("WAYLAND_DISPLAY");
+    const bool wayland_session =
+        (session != nullptr && std::string(session) == "wayland") ||
+        (session == nullptr && wayland != nullptr && wayland[0] != '\0');
+    if (wayland_session) (void)wayland_active_window_info(info);
 
-    if (info["pid"].empty()) {
-        const std::string kdotool = which("kdotool");
-        if (!kdotool.empty()) {
-            const CommandResult active = run_command({kdotool, "getactivewindow"}, std::string(), 250);
-            if (active.returncode == 0) {
-                std::string id = active.out;
-                while (!id.empty() &&
-                       (id.back() == '\n' || id.back() == '\r' || id.back() == ' ' || id.back() == '\t')) {
-                    id.pop_back();
-                }
-                if (!id.empty()) {
-                    const CommandResult title = run_command({kdotool, "getwindowname", id}, std::string(), 250);
-                    if (title.returncode == 0) {
-                        std::string value = title.out;
-                        while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) value.pop_back();
-                        info["title"] = value;
-                    }
-                    const CommandResult window_class = run_command({kdotool, "getwindowclassname", id}, std::string(), 250);
-                    if (window_class.returncode == 0) {
-                        std::string value = window_class.out;
-                        while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) value.pop_back();
-                        info["class"] = value;
-                    }
-                    const CommandResult pid = run_command({kdotool, "getwindowpid", id}, std::string(), 250);
-                    if (pid.returncode == 0) {
-                        std::string value = pid.out;
-                        while (!value.empty() &&
-                               (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' ||
-                                value.back() == '\t')) {
-                            value.pop_back();
-                        }
-                        if (!value.empty() &&
-                            std::all_of(value.begin(), value.end(), [](char c) static {
-                                return std::isdigit(static_cast<unsigned char>(c)) != 0;
-                            })) {
-                            info["pid"] = value;
-                        }
-                    }
-                }
-            }
-        }
+    for (const char* tool : {"xdotool", "kdotool"}) {
+        const std::string executable = which(tool);
+        if (!executable.empty()) fill_from_window_tool(executable, info);
     }
 
     if (!info["pid"].empty()) {

@@ -2,14 +2,18 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 
 #include "subprocess.hpp"
+#include "wayland_native.hpp"
 
 namespace loomwright {
 namespace {
 const char* const kScreenshotTools[] = {"spectacle", "grim", "gnome-screenshot", "scrot", "import"};
+
+bool has_value(const char* value) { return value != nullptr && value[0] != '\0'; }
 }
 
 std::string format_coordinates(int x, int y) {
@@ -89,7 +93,34 @@ CaptureResult capture_desktop(const ExecutableFinder& finder) {
     throw PickerError("Could not capture the desktop for the mouse position picker. " + detail);
 }
 
+PickerBackend choose_picker_backend(const char* session, const char* wayland_display, const char* display,
+                                    bool native_wayland_available) {
+    const bool wayland_session = (session != nullptr && std::string(session) == "wayland") ||
+                                 (session == nullptr && has_value(wayland_display));
+    if (native_wayland_available && (wayland_session || (!has_value(display) && has_value(wayland_display))))
+        return PickerBackend::Wayland;
+    if (has_value(display)) return PickerBackend::X11;
+    return PickerBackend::None;
+}
+
 std::optional<std::pair<int, int>> pick_mouse_position_xcb(bool verbose);
-std::optional<std::pair<int, int>> pick_mouse_position(bool verbose) { return pick_mouse_position_xcb(verbose); }
+
+std::optional<std::pair<int, int>> pick_mouse_position(bool verbose) {
+    const PickerBackend backend =
+        choose_picker_backend(std::getenv("XDG_SESSION_TYPE"), std::getenv("WAYLAND_DISPLAY"), std::getenv("DISPLAY"),
+                              wayland_picker_available());
+    switch (backend) {
+        case PickerBackend::Wayland:
+            return pick_mouse_position_wayland(verbose);
+        case PickerBackend::X11:
+            return pick_mouse_position_xcb(verbose);
+        case PickerBackend::None:
+            break;
+    }
+    throw PickerError(
+        "Cannot open a display for the mouse position picker. Use an X11 session (DISPLAY set; XWayland is enough) or "
+        "a native Wayland session (WAYLAND_DISPLAY set) built with GTK3 and wayland-client, or use loomwright --screen "
+        "to calibrate coordinates manually.");
+}
 
 }  // namespace loomwright

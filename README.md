@@ -111,13 +111,16 @@ loomwright --get-mouse-pos
 loomwright --docs [topic]
 loomwright --list-api
 loomwright --devices
+loomwright --broker
 loomwright --screen
 loomwright --doctor
 loomwright --version
 ```
 
 - `--check` does static checking only; it does not open input devices or start the runtime. It rejects unknown function names, wrong argument counts, `break` outside a loop, and `return` outside a function.
+- `--get-mouse-pos` uses a native Wayland overlay in a Wayland session (built with GTK3/wayland-client) and X11/Xwayland otherwise. `--doctor` shows which backend and active-window sources this environment has.
 - `--run` refuses scripts with checker errors. Use `--dry-run` to log output actions without injecting them (live key listening still needs evdev permissions).
+- `--broker` reports the connected scripts, watched devices, claimed keys and conflicts of the shared input broker. It does not start the broker or change any claims.
 - Stop a running script with the panic key (**PAUSE** by default) or `Ctrl+C`. Set `option panic = "none"` to disable the panic key (not recommended).
 
 ## Example
@@ -158,13 +161,21 @@ Named mouse holds are reference-counted: if A and D overlap, the left button sta
 native Wayland panels when a Wayland session and native support are available,
 otherwise X11/Xwayland. Set `"wayland"` to require a native Wayland session,
 or `"x11"` to require an accessible X11/Xwayland display. These choices affect
-persistent `gui` panels, not evdev input or uinput output. The separate
-`--get-mouse-pos` picker still needs X11/Xwayland. Wayland does not provide a
-portable global window-query API; window-query helpers may return empty values.
+persistent `gui` panels, not evdev input or uinput output.
+The separate `--get-mouse-pos` picker uses the same runtime detection: a
+Wayland session with GTK3 and wayland-client gets a native full-screen overlay;
+otherwise it uses X11/Xwayland when `DISPLAY` is set. Both need a screenshot
+tool (for example grim on wlroots or spectacle on KDE). Wayland has no portable
+global pointer or window-query protocol, so native coordinates come from the
+output the overlay covers, and `active_window_title()` /
+`active_window_class()` use the compositor's `zwlr_foreign_toplevel_manager_v1`
+when it is offered. `active_window_pid()` and `active_window_process()` stay
+empty unless `xdotool` or `kdotool` supplies a PID; on compositors with neither
+a toplevel protocol nor a query tool, the string helpers return empty values.
 Compositor window placement and always-on-top behavior are controlled by the
 Wayland compositor and may differ from X11.
-When `WAYLAND_SOCKET` is supplied, native panels also require a named
-`WAYLAND_DISPLAY`.
+When `WAYLAND_SOCKET` is supplied, native panels and the native picker need a
+named `WAYLAND_DISPLAY` (the socket is owned by the caller).
 When screen detection cannot determine the size on Wayland, set
 `option screen = "WIDTHxHEIGHT"` explicitly for coordinate-based actions.
 
@@ -339,7 +350,7 @@ Both output backends need `/dev/uinput` access. Pointer motion, scrolling, and k
 
 Run scripts in separate terminals or processes as usual. By default, Loomwright starts a local input broker on demand. Scripts sharing the broker can listen to the same keyboard and consume or remap different keys without blocking one another. All subscribed scripts see the physical key edges, including consumed keys; the desktop receives each unconsumed event once. A panic key configured by any live, non-dry-run client passes through to the desktop. `--dry-run` still sees physical input but does not change what the broker consumes.
 
-The broker is shared by invocations of the same user with the same `$XDG_RUNTIME_DIR` (or by that user when it is unset). It exits automatically when no scripts need it and any captured keys have been released. Release held keys before starting the first consuming script. Use `--input-mode direct` only for standalone runs; a direct-mode script or another remapper cannot share an exclusive grab on the same keyboard. `--doctor` reports whether the broker is running.
+The broker is shared by invocations of the same user with the same `$XDG_RUNTIME_DIR` (or by that user when it is unset). It exits automatically when no scripts need it and any captured keys have been released. Release held keys before starting the first consuming script. Use `--input-mode direct` only for standalone runs; a direct-mode script or another remapper cannot share an exclusive grab on the same keyboard. `--doctor` reports whether the broker is running, and `loomwright --broker` lists its connected scripts, watched devices, consumed keys and shared holds. A conflict is reported when two scripts consume the same key on the same device (both suppress and act on the same physical edge) or hold the same synthetic key or button (coordinated to one injection, but still worth knowing about). Each conflict names the scripts and the device.
 
 Scripts sharing the broker also share synthetic key and button injection: when two scripts hold the same key or button it is injected once and released only after the last one frees it. A script that stops or disconnects drops only its own claims, and `mouse_held()` sees buttons held by any script. Shared keys and buttons are injected through one broker-owned backend selected with `auto`; pointer motion and `send TEXT` still use each script's own `output` backend. `--input-mode direct` and `--dry-run` do not claim shared output.
 

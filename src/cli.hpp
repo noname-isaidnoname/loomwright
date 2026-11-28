@@ -26,6 +26,7 @@ struct CliArgs {
     std::optional<std::string> screen_size;
 
     bool devices = false;
+    bool broker = false;
     bool screen = false;
     bool get_mouse_pos = false;
     bool list_api = false;

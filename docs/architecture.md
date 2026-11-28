@@ -30,21 +30,23 @@ automation process before its output cleanup.
 | `src/backends.cpp`, `src/backends.hpp` | `OutputBackend` interface, ydotoold, uinput, dry run, backend selection |
 | `src/uinput.cpp`, `src/uinput.hpp` | `UInputDevice`: creates the virtual device, batched `input_event` writes |
 | `src/input.cpp`, `src/input.hpp` | `InputDevice`: open/list `/dev/input/event*`, evdev caps, grab/ungrab, passthrough replay |
-| `src/input_broker.cpp`, `src/input_client.cpp` | Local broker election, per-device capture and fan-out; client registration and edge delivery; shared synthetic key/button claims and held-state snapshots |
+| `src/input_broker.cpp`, `src/input_client.cpp` | Local broker election, per-device capture and fan-out; client registration with script names and edge delivery; shared synthetic key/button claims, held-state snapshots and read-only `Status` snapshots for `--broker` |
 | `src/subprocess.cpp`, `src/subprocess.hpp` | `run_command`/`spawn_detached`, `which`, `split_shell_words`, `ydotool_socket_path` |
 | `src/keys.cpp`, `src/keys.inc` | key-name tables, `validate_key_name`, `canonical_key_name`, `find_mouse_button` |
 | `src/value.cpp`, `src/value.hpp` | `Value` (int/double/bool/string), `repr`/`str` formatting, truthiness |
 | `src/builtins.cpp`, `src/builtins.hpp` | the builtin-function table (constexpr, sorted), arity lookup and the `Builtin` enum |
 | `src/mousepos.cpp`, `src/mousepos.hpp` | screenshot-overlay coordinate picker (`--get-mouse-pos`) |
 | `src/picker_xcb.cpp`, `src/picker_image.cpp` | the picker's XCB transport and screenshot pixel handling |
+| `src/picker_wayland.cpp`, `src/wayland_native.hpp` | Native Wayland fullscreen picker in an isolated GTK3 helper, plus capability detection |
+| `src/active_window_wayland.cpp`, `protocol/*.xml` | Optional Wayland active-window query through `zwlr_foreign_toplevel_manager_v1`, generated at configure time with `wayland-scanner` |
 | `src/gui.cpp`, `src/gui.hpp` | `GuiHost`: X11/Xwayland panels, keyboard mapping, event dispatch |
 | `src/gui_wayland.cpp` | Isolated GTK3 Wayland panel helpers and compositor selection |
 | `src/xcb_connection.cpp`, `src/xcb_connection.hpp` | RAII XCB transport with explicit error inspection |
 | `src/unique_fd.hpp` | RAII wrapper for raw file descriptors |
-| `src/cli.cpp`, `src/main.cpp` | `--init`, `--check`, `--run`, `--docs`, `--devices`, `--screen`, `--get-mouse-pos`, `--doctor`, `--list-api`, `--version` |
+| `src/cli.cpp`, `src/main.cpp` | `--init`, `--check`, `--run`, `--docs`, `--devices`, `--broker`, `--screen`, `--get-mouse-pos`, `--doctor`, `--list-api`, `--version` |
 | `src/docs.cpp` | user-facing language guide (`kGuide`) and `api_reference()` |
 | `examples/two_spots.loom` | A/D hold regression script used by tests |
-| `tests/*.cpp` | parser, checker, runtime, scheduler, picker and CLI tests (`tests/harness.hpp` mini test runner) |
+| `tests/*.cpp` | parser, checker, runtime, scheduler, picker, broker-status and CLI tests (`tests/harness.hpp` mini test runner) |
 | `Makefile` | thin one-word targets (`make`, `make test`, `make install`, `make package`) |
 | `packaging/arch/PKGBUILD` | Arch package built from a local checkout; `check()` runs the test suite only with `LOOMWRIGHT_BUILD_TESTS=ON` |
 | `packaging/common/` | Shared desktop entry, scalable icon, MIME type, terminal launcher and package post-install scripts installed by CMake |
@@ -166,6 +168,14 @@ script joining mid-hold starts with the same held state as the others.
 claim client in shared, non-dry-run mode and use the local backend otherwise.
 Pointer motion, scrolling and `type_text` remain per-script.
 
+Registrations carry the script name, consumption/panic codes and subscribed
+device ids. A `Status` request from an unregistered same-user client returns a
+packet snapshot of registered clients, captured devices and output claims; the
+CLI formats it with pure helpers in `src/input_broker.cpp`. Conflicts are two
+scripts consuming the same key on one device or holding the same synthetic
+key/button. The probe disconnects without registering, so the query does not
+create a subscriber or change capture policy.
+
 ### Output (`src/runtime_output.cpp`, `src/backends.cpp`)
 
 `OutputBackend` is the interface: `warp`, `move`, `button`, `key`, `type_text`,
@@ -214,12 +224,14 @@ mapping and refreshes it on `XCB_MAPPING_NOTIFY` so layout switches are picked
 up. Panel events are dispatched back into the same `execute()` path through
 `Runtime::dispatch_gui_event`.
 
-### Mouse-position picker (`src/mousepos.cpp`, `src/picker_xcb.cpp`, `src/picker_image.cpp`)
+### Mouse-position picker (`src/mousepos.cpp`, `src/picker_xcb.cpp`, `src/picker_image.cpp`, `src/picker_wayland.cpp`)
 
-`--get-mouse-pos` is a separate X11 client. It captures the desktop with an
+`--get-mouse-pos` is a standalone client that captures the desktop with an
 installed screenshot tool, shows the still image in a full-screen managed
-splash window, follows the pointer with a tooltip, and prints the clicked
-coordinates. See [cli.md](cli.md#mouse-position-picker).
+window, follows the pointer with a tooltip, and prints the clicked coordinates.
+`choose_picker_backend()` selects the XCB transport or a native GTK3 Wayland
+fullscreen helper from the session environment. See
+[cli.md](cli.md#mouse-position-picker).
 
 ## Data model
 

@@ -15,6 +15,27 @@ TEST_CASE(coordinate_format_matches_loom_syntax) {
     CHECK_EQ(format_coordinates(640, 420), std::string("640, 420"));
 }
 
+TEST_CASE(picker_prefers_native_wayland_in_a_wayland_session) {
+    CHECK_TRUE(choose_picker_backend("wayland", "wayland-0", nullptr, true) == PickerBackend::Wayland);
+    CHECK_TRUE(choose_picker_backend("wayland", "wayland-0", ":0", true) == PickerBackend::Wayland);
+    CHECK_TRUE(choose_picker_backend(nullptr, "wayland-0", nullptr, true) == PickerBackend::Wayland);
+    // No X display: a named Wayland socket is enough even if the session type is unset.
+    CHECK_TRUE(choose_picker_backend("x11", "wayland-0", nullptr, true) == PickerBackend::Wayland);
+}
+
+TEST_CASE(picker_uses_x11_without_native_wayland_support_or_in_x11_sessions) {
+    CHECK_TRUE(choose_picker_backend("wayland", "wayland-0", ":0", false) == PickerBackend::X11);
+    CHECK_TRUE(choose_picker_backend("x11", "wayland-0", ":0", true) == PickerBackend::X11);
+    CHECK_TRUE(choose_picker_backend("x11", nullptr, ":1", false) == PickerBackend::X11);
+    CHECK_TRUE(choose_picker_backend(nullptr, nullptr, ":0", false) == PickerBackend::X11);
+}
+
+TEST_CASE(picker_reports_no_display_without_either_backend) {
+    CHECK_TRUE(choose_picker_backend(nullptr, "", "", false) == PickerBackend::None);
+    CHECK_TRUE(choose_picker_backend(nullptr, nullptr, nullptr, false) == PickerBackend::None);
+    CHECK_TRUE(choose_picker_backend("wayland", "wayland-0", nullptr, false) == PickerBackend::None);
+}
+
 TEST_CASE(picker_pixels_convert_rgb565_in_both_byte_orders) {
     const std::vector<unsigned char> rgba{255, 0, 0, 255, 0, 0, 255, 255};
     PickerPixelFormat format{16, 32, true, 0xf800, 0x07e0, 0x001f};

@@ -280,7 +280,9 @@ void Runtime::physical_key(const std::string& path, const std::string& key, bool
             } else if (event.edge == "up") {
                 active_hotkey_ups_[key].push_back(&event);
             } else if (event.edge == "held") {
-                held_tasks_[{key, event.line}] = spawn_held(event, key);
+                // spawn_held registers its own bookkeeping entry with a unique
+                // ticket so a cancelled frame cannot erase a replacement.
+                (void)spawn_held(event, key);
             }
         }
     } else {
@@ -304,7 +306,7 @@ void Runtime::physical_key(const std::string& path, const std::string& key, bool
         }
         for (auto it = held_tasks_.begin(); it != held_tasks_.end();) {
             if (it->first.first == key) {
-                scheduler_.cancel(it->second);
+                scheduler_.cancel(it->second.handle);
                 it = held_tasks_.erase(it);
             } else {
                 ++it;

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "input.hpp"
+#include "input_broker_protocol.hpp"
 #include "parser.hpp"
 #include "runtime.hpp"
 #include "runtime_fixtures.hpp"
@@ -146,9 +147,12 @@ int run() {
     require(running, "broker did not start");
 
     BrokerRequest request;
+    request.name = "first script";
     request.device = fixture.absent_device();
     auto first = std::make_unique<InputClient>(request);
-    auto second = std::make_unique<InputClient>(request);
+    BrokerRequest second_request = request;
+    second_request.name = "second script";
+    auto second = std::make_unique<InputClient>(second_request);
     std::string line;
 
     // Two scripts claim one key. Only the first down and the last up are
@@ -157,6 +161,24 @@ int run() {
     second->claim_output(OutputKind::Key, "A", true);
     require(wait_owners(*first, OutputKind::Key, "A", 2), "first client missed the overlapping claim");
     require(wait_owners(*second, OutputKind::Key, "A", 2), "second client missed the overlapping claim");
+
+    // The read-only status query sees both script names and their shared hold.
+    const auto status = read_broker_status();
+    require(status.has_value(), "broker status was unavailable");
+    require(status->protocol == broker::kProtocol, "status reported the wrong protocol version");
+    require(status->clients.size() == 2, "status missed a connected script");
+    require(std::any_of(status->clients.begin(), status->clients.end(),
+                        [](const BrokerStatusClient& client) { return client.name == "first script"; }),
+            "status lost the first script's name");
+    require(status->claims.size() == 1 && status->claims[0].name == "A" &&
+                status->claims[0].owners.size() == 2,
+            "status lost the shared key claim");
+    const auto conflicts = broker_conflicts(*status);
+    require(conflicts.size() == 1 && conflicts[0].kind == "hold" && conflicts[0].key == "key A",
+            "status did not surface the overlapping hold");
+    require(format_broker_status(*status).contains("\"second script\""),
+            "formatted status did not name the second script");
+
     require(read_line(fixture.pipe_fds[0], line, 1000) && line == "key A down", "missing initial key injection");
     require(!read_line(fixture.pipe_fds[0], line, 100), "overlapping claim injected a duplicate key down");
     first->claim_output(OutputKind::Key, "A", false);

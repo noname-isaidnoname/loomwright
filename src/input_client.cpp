@@ -138,6 +138,7 @@ Packet wait_packet(int fd, Clock::time_point deadline) {
 InputClient::InputClient(const BrokerRequest& request) {
     Packet registration(Message::Register);
     registration.number(kProtocol);
+    registration.text(request.name);
     registration.text(request.device);
     registration.number((request.mice ? 1 : 0) | (request.require_keyboard ? 2 : 0));
     registration.codes(request.consume);
@@ -255,6 +256,54 @@ bool input_broker_running() {
     } catch (const std::exception&) {
         return false;
     }
+}
+
+std::optional<BrokerStatus> read_broker_status() {
+    auto socket = connect_broker();
+    if (socket.get() < 0) return std::nullopt;
+    if (!broker::send(socket.get(), Packet(Message::Status)))
+        throw RuntimeErrorLoomwright("Input broker status request interrupted");
+    auto packet = wait_packet(socket.get(), Clock::now() + 2s);
+    if (packet.bytes().empty()) throw RuntimeErrorLoomwright("Input broker disconnected during status request");
+    const auto type = packet.type();
+    if (type == Message::Error) read_error(packet);
+    if (type != Message::StatusReply) Packet::invalid();
+
+    BrokerStatus status;
+    status.protocol = static_cast<int>(packet.count(16));
+    const size_t client_count = packet.count(128);
+    for (size_t i = 0; i < client_count; ++i) {
+        BrokerStatusClient client;
+        client.name = packet.text();
+        const size_t paths = packet.count(kMaxDevices);
+        for (size_t j = 0; j < paths; ++j) client.devices.push_back(packet.text());
+        client.consume = broker::read_codes(packet);
+        client.panic = broker::read_codes(packet);
+        status.clients.push_back(std::move(client));
+    }
+    const size_t device_count = packet.count(kMaxDevices);
+    for (size_t i = 0; i < device_count; ++i) {
+        BrokerStatusDevice device;
+        device.path = packet.text();
+        device.name = packet.text();
+        device.keyboard = packet.count(1) != 0;
+        device.mouse = packet.count(1) != 0;
+        device.grabbed = packet.count(1) != 0;
+        device.down = broker::read_codes(packet);
+        status.devices.push_back(std::move(device));
+    }
+    const size_t claim_count = packet.count(kMaxDevices);
+    for (size_t i = 0; i < claim_count; ++i) {
+        BrokerStatusClaim claim;
+        claim.kind = broker::read_output_kind(packet);
+        claim.name = packet.text();
+        if (claim.name.empty()) Packet::invalid();
+        const size_t owners = packet.count(128);
+        for (size_t j = 0; j < owners; ++j) claim.owners.push_back(packet.text());
+        status.claims.push_back(std::move(claim));
+    }
+    packet.finish();
+    return status;
 }
 
 }  // namespace loomwright

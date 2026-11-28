@@ -771,9 +771,11 @@ void Runtime::prune_background() {
 }
 
 Task::handle_type Runtime::spawn_held(const Node& event, const std::string& key) {
-    Task task = held_loop(event, key, event.interval);
+    const std::uint64_t ticket = ++held_ticket_;
+    Task task = held_loop(event, key, event.interval, ticket);
     const Task::handle_type handle = task.handle;
     scheduler_.spawn(std::move(task));
+    held_tasks_[{key, event.line}] = {handle, ticket};
     background_.push_back(handle);
     prune_background();
     return handle;
@@ -882,6 +884,7 @@ Task Runtime::run_body() {
         }
         if (options_.shared_input) {
             BrokerRequest request;
+            request.name = script_.name;
             if (!options_.input_device.empty())
                 request.device = std::filesystem::absolute(options_.input_device).string();
             request.mice = has_mouse_events;
@@ -1017,7 +1020,7 @@ Task Runtime::run_body() {
     }
 
     for (const auto& handle : background_) scheduler_.cancel(handle);
-    for (const auto& entry : held_tasks_) scheduler_.cancel(entry.second);
+    for (const auto& entry : held_tasks_) scheduler_.cancel(entry.second.handle);
     while (!(co_await cleanup_drain())) {
         // Cancellation can wake the cleanup waiter before other tasks finish.
     }
@@ -1054,13 +1057,20 @@ Task Runtime::timer_loop(const Node& event, double interval) {
     }
 }
 
-Task Runtime::held_loop(Node event, std::string key, double interval) {
+Task Runtime::held_loop(Node event, std::string key, double interval, std::uint64_t ticket) {
     if (interval <= 0.0) co_return;
     struct HeldTaskGuard {
         Runtime* runtime;
         std::pair<std::string, int> id;
-        ~HeldTaskGuard() { runtime->held_tasks_.erase(id); }
-    } guard{this, {key, event.line}};
+        std::uint64_t ticket;
+        ~HeldTaskGuard() {
+            // A rapid re-press can register a replacement under the same id
+            // before this cancelled frame unwinds. Only remove our own entry.
+            const auto found = runtime->held_tasks_.find(id);
+            if (found != runtime->held_tasks_.end() && found->second.ticket == ticket)
+                runtime->held_tasks_.erase(found);
+        }
+    } guard{this, {key, event.line}, ticket};
     // Tick on a fixed schedule: time spent inside the handler is part of the
     // interval, so `every 10ms` with a 5ms tap still repeats every 10ms.
     double deadline = scheduler_.now() + interval;

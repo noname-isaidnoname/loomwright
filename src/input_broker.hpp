@@ -31,6 +31,8 @@ struct OutputState {
 };
 
 struct BrokerRequest {
+    /// Script name shown by `loomwright --broker`; empty for unnamed clients.
+    std::string name;
     std::string device;
     std::set<int> consume;
     std::set<int> panic;
@@ -90,6 +92,8 @@ public:
     void clear();
     std::vector<OutputState> held() const;
     int owners(OutputKind kind, const std::string& name) const;
+    /// Sorted client ids, for naming the scripts behind a shared claim.
+    std::vector<int> owner_ids(OutputKind kind, const std::string& name) const;
     bool is_held(OutputKind kind, const std::string& name) const;
 
 private:
@@ -118,5 +122,53 @@ using BrokerKeyboard = std::function<bool(const InputDevice&)>;
 using BrokerOutputFactory = std::function<std::unique_ptr<OutputBackend>()>;
 int run_input_broker(const BrokerKeyboard& is_keyboard = {}, BrokerOutputFactory output = {});
 bool input_broker_running();
+
+/// Read-only view of a running broker for `loomwright --broker`. Returns
+/// nullopt when no compatible broker is listening. Throws on protocol errors.
+struct BrokerStatusClient {
+    std::string name;
+    std::vector<std::string> devices;  // device paths this client subscribed to
+    std::vector<int> consume;          // physical key codes claimed for suppression
+    std::vector<int> panic;            // key codes this client exempts
+};
+
+struct BrokerStatusDevice {
+    std::string path;
+    std::string name;
+    bool keyboard = false;
+    bool mouse = false;
+    bool grabbed = false;  // the broker owns EVIOCGRAB and replays this device
+    std::vector<int> down;
+};
+
+struct BrokerStatusClaim {
+    OutputKind kind = OutputKind::Key;
+    std::string name;
+    std::vector<std::string> owners;  // script names
+};
+
+struct BrokerStatus {
+    int protocol = 0;
+    std::vector<BrokerStatusClient> clients;
+    std::vector<BrokerStatusDevice> devices;
+    std::vector<BrokerStatusClaim> claims;
+};
+
+std::optional<BrokerStatus> read_broker_status();
+
+/// A contention worth reporting: several scripts consume the same key on the
+/// same physical device (`consume`), or hold the same synthetic key/button
+/// (`hold`). `key` and `device` name the contested resource; `scripts` names
+/// every owner so the report can be acted on.
+struct BrokerConflict {
+    std::string kind;  // "consume" or "hold"
+    std::string key;
+    std::string device;
+    std::vector<std::string> scripts;
+};
+
+std::vector<BrokerConflict> broker_conflicts(const BrokerStatus& status);
+/// Full, deterministic text of `loomwright --broker`, including a trailing newline.
+std::string format_broker_status(const BrokerStatus& status);
 
 }  // namespace loomwright

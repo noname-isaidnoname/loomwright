@@ -39,7 +39,10 @@ handling. The AppImage carries the icon and desktop entry inside the image.
 
 The release artifacts are built with Clang, the reference compiler (see
 [benchmark.md](benchmark.md)); the CI workflow builds and tests with Clang and
-with GCC.
+with GCC. It also has a smaller Weston job that builds once with GCC and runs
+only the native Wayland CTest cases on a headless compositor, reusing the
+compiler cache instead of repeating the full matrix. Release CI may skip those
+cases when Weston is unavailable on a runner; that is not a release failure.
 
 ## Publishing
 

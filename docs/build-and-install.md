@@ -10,7 +10,9 @@ For release downloads, packaging scripts, and container-based verification see
 - Ninja
 - pkg-config
 - X11, XCB and libpng development headers
-- Optional for native Wayland panels: GTK3 and wayland-client development headers
+- Optional for native Wayland panels, the picker and active-window queries:
+  GTK3 and wayland-client development headers, plus `wayland-scanner` for the
+  toplevel protocol bindings
 
 Debian/Ubuntu:
 
@@ -26,6 +28,10 @@ sudo pacman -S cmake ninja pkgconf clang libx11 libxcb libpng gtk3 wayland
 
 Runtime (not needed to build): `ydotool`/`ydotoold`, or a writable
 `/dev/uinput`, and one of the screenshot tools for `--get-mouse-pos`.
+
+Regenerating the committed `src/keys.inc` is also not part of a normal build.
+When the kernel UAPI header changes, `scripts/gen-keytable.sh` needs only
+standard shell tools (bash, awk, sort and coreutils).
 
 ## Build presets
 
@@ -81,7 +87,7 @@ Variables: `JOBS=8`, `PREFIX=/usr/local`, `BUILD=build/release`.
 | `LOOMWRIGHT_LTO` | ON | Link with link-time optimization when the linker can read the bitcode |
 | `LOOMWRIGHT_SANITIZE` | OFF | Build with `-fsanitize=address,undefined` |
 | `LOOMWRIGHT_HARDEN` | ON | `-fstack-protector-strong`, `-D_FORTIFY_SOURCE=3`, `-fPIE` |
-| `LOOMWRIGHT_WAYLAND` | ON | Build native Wayland panels if GTK3 and wayland-client are available |
+| `LOOMWRIGHT_WAYLAND` | ON | Build native Wayland panels, the picker and the toplevel query if GTK3, wayland-client and wayland-scanner are available |
 | `LOOMWRIGHT_DESKTOP_INTEGRATION` | ON | Install the desktop entry, icon, MIME type and terminal launcher |
 
 `LOOMWRIGHT_SANITIZE` and `LOOMWRIGHT_HARDEN` are mutually exclusive in practice: the
@@ -126,10 +132,14 @@ CC=clang CXX=clang++ cmake --preset release
 ccache is used automatically when `CMAKE_CXX_COMPILER_LAUNCHER` is not set
 explicitly and `ccache` is on `PATH`.
 
-CMake detects GTK3 and wayland-client at configure time. Without their
-development files the X11 backend still builds, while explicit Wayland panels
-fail with an installation hint. Install the headers and reconfigure to enable
-them. Official releases build with both dependencies.
+CMake detects GTK3 and wayland-client at configure time. GTK3 plus
+wayland-client enable native Wayland panels and the fullscreen picker;
+`wayland-scanner` generates the `zwlr_foreign_toplevel_manager_v1` bindings used
+by the native active-window query. Without those development files the X11
+backend still builds, while explicit Wayland panels and the native picker fail
+with an installation hint. Without the scanner the active-window query simply
+reports no native source. Install the headers and reconfigure to enable them.
+Official releases build with all of them.
 
 ## Install
 
@@ -226,9 +236,10 @@ Do not run Loomwright as root to bypass permissions.
 ## Environment assumptions
 
 The code must not assume a session type, compositor, distro or package
-manager. Detect at runtime (`--doctor`, `choose_backend()`, the picker's
-X11/XWayland path) and keep docs generic. Label session- and distro-specific
-steps explicitly, as the Arch sections above do.
+manager. Detect at runtime (`--doctor`, `choose_backend()`,
+`choose_picker_backend()`, the panel compositor selection and the optional
+Wayland toplevel protocol) and keep docs generic. Label session- and
+distro-specific steps explicitly, as the Arch sections above do.
 
 `--doctor` reports the detected environment; `--devices` lists readable input
 devices; `--screen` prints the detected virtual desktop size.

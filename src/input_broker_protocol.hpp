@@ -24,10 +24,13 @@ enum class Message : int32_t {
     Probe,
     OutputClaim,
     OutputState,
+    Status,
+    StatusReply,
 };
-// Version 2 adds shared output claims and held-state snapshots. An older
-// broker cannot coordinate output, so clients refuse to talk to it.
-constexpr int32_t kProtocol = 2;
+// Version 3 adds script names to registrations and the Status/StatusReply
+// exchange used by `loomwright --broker`. An older broker cannot describe its
+// clients, so status requests and clients refuse to talk to it.
+constexpr int32_t kProtocol = 3;
 constexpr size_t kMaxPacket = 16384;
 constexpr size_t kMaxDevices = 256;
 using Clock = std::chrono::steady_clock;

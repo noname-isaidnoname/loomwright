@@ -21,6 +21,7 @@
 #include "parser.hpp"
 #include "runtime.hpp"
 #include "subprocess.hpp"
+#include "wayland_native.hpp"
 
 #ifndef LOOMWRIGHT_VERSION
 #define LOOMWRIGHT_VERSION "0.0.0"
@@ -201,6 +202,22 @@ int command_devices() {
     return 0;
 }
 
+int command_broker() {
+    std::optional<BrokerStatus> status;
+    try {
+        status = read_broker_status();
+    } catch (const std::exception& error) {
+        std::cerr << kMarker << error.what() << "\n";
+        return 2;
+    }
+    if (!status) {
+        std::cout << "Input broker is not running (starts on demand).\n";
+        return 0;
+    }
+    std::cout << format_broker_status(*status);
+    return 0;
+}
+
 std::string boolean_text(bool value) { return value ? "true" : "false"; }
 
 int command_doctor() {
@@ -230,6 +247,26 @@ int command_doctor() {
     }
     const bool uinput_ready = ::access("/dev/uinput", W_OK) == 0;
     std::cout << "/dev/uinput: " << (uinput_ready ? "present and writable" : "missing or not writable") << "\n";
+    const PickerBackend picker =
+        choose_picker_backend(session, std::getenv("WAYLAND_DISPLAY"), std::getenv("DISPLAY"),
+                              wayland_picker_available());
+    std::cout << "Mouse picker: "
+              << (picker == PickerBackend::Wayland   ? "native Wayland (WAYLAND_DISPLAY, GTK3)"
+                  : picker == PickerBackend::X11     ? "X11/XWayland (DISPLAY)"
+                                                     : "unavailable — set DISPLAY or WAYLAND_DISPLAY")
+              << "\n";
+    const bool wayland_session =
+        (session != nullptr && std::string(session) == "wayland") ||
+        (session == nullptr && std::getenv("WAYLAND_DISPLAY") != nullptr && std::getenv("WAYLAND_DISPLAY")[0] != '\0');
+    const std::string native_toplevel =
+        !wayland_session ? "not in a Wayland session"
+        : wayland_active_window_available() ? "native Wayland toplevel protocol"
+                                           : "no native Wayland toplevel protocol";
+    const std::string xdotool_path = which("xdotool");
+    const std::string kdotool_path = which("kdotool");
+    std::cout << "Active window sources: " << native_toplevel << "; xdotool: "
+              << (xdotool_path.empty() ? "not found" : xdotool_path) << "; kdotool: "
+              << (kdotool_path.empty() ? "not found" : kdotool_path) << "\n";
     std::cout << "X11: " << (std::getenv("DISPLAY") != nullptr ? "available (loomwright --get-mouse-pos)"
                                                                : "MISSING — set DISPLAY for loomwright --get-mouse-pos")
               << "\n";
@@ -288,7 +325,7 @@ const char* version_string() { return LOOMWRIGHT_VERSION; }
 
 std::string usage_text() {
     return "usage: loomwright [-h] [--init SCRIPT | --check PATH | --run PATH | --docs [TOPIC] | --devices |\n"
-           "               --screen | --get-mouse-pos | --list-api | --doctor]\n"
+           "               --broker | --screen | --get-mouse-pos | --list-api | --doctor]\n"
            "               [--force] [--dry-run] [--input-device EVENT_PATH]\n"
            "               [--input-mode {auto,direct,broker}]\n"
            "               [--output-backend {auto,ydotool,uinput}] [--screen-size WIDTHxHEIGHT] [--verbose]\n"
@@ -309,6 +346,7 @@ std::string help_text() {
            "  --run PATH            run a script\n"
            "  --docs [TOPIC]        show language documentation\n"
            "  --devices             list visible input devices and permissions\n"
+           "  --broker              list scripts, devices, claimed keys and conflicts\n"
            "  --screen              print the detected desktop size\n"
            "  --get-mouse-pos       pick a pointer position with an on-screen tooltip\n"
            "  --list-api            list built-in API groups\n"
@@ -384,6 +422,9 @@ CliArgs parse_cli(const std::vector<std::string>& args) {
         } else if (token == "--devices") {
             note_mode(token);
             parsed.devices = true;
+        } else if (token == "--broker") {
+            note_mode(token);
+            parsed.broker = true;
         } else if (token == "--screen") {
             note_mode(token);
             parsed.screen = true;
@@ -459,6 +500,7 @@ int run_cli(const std::vector<std::string>& args, const PickerFunction& picker) 
         return 0;
     }
     if (parsed.devices) return command_devices();
+    if (parsed.broker) return command_broker();
     if (parsed.screen) {
         const auto bounds = detect_screen_size();
         std::cout << bounds.first << "x" << bounds.second << "\n";

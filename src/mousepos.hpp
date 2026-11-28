@@ -10,11 +10,18 @@
 
 namespace loomwright {
 
-/// The picker cannot start (no display, missing X11, no screenshot tool).
+/// The picker cannot start (no display, missing X11/Wayland, no screenshot tool).
 class PickerError : public std::runtime_error {
 public:
     explicit PickerError(const std::string& message) : std::runtime_error(message) {}
 };
+
+enum class PickerBackend { Wayland, X11, None };
+
+/// Decide which display the picker would use. Pure so it can be tested without
+/// a compositor; pass the four environment values and the build capability.
+PickerBackend choose_picker_backend(const char* session, const char* wayland_display, const char* display,
+                                    bool native_wayland_available);
 
 constexpr int kTooltipOffset = 18;
 constexpr int kPollMs = 16;

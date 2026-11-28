@@ -233,20 +233,54 @@ add_library(loomwright_core STATIC
     src/cli.cpp)
 target_include_directories(loomwright_core PUBLIC src)
 target_link_libraries(loomwright_core PUBLIC loomwright_options PkgConfig::X11 PkgConfig::XCB PkgConfig::LIBPNG)
-add_library(loomwright_wayland OBJECT src/gui_wayland.cpp)
+add_library(loomwright_wayland OBJECT
+    src/gui_wayland.cpp src/picker_wayland.cpp src/active_window_wayland.cpp)
 target_link_libraries(loomwright_wayland PRIVATE loomwright_options PkgConfig::XCB)
 target_sources(loomwright_core PRIVATE $<TARGET_OBJECTS:loomwright_wayland>)
+if(LOOMWRIGHT_WAYLAND AND WAYLAND_FOUND)
+    target_link_libraries(loomwright_wayland PRIVATE PkgConfig::WAYLAND)
+    target_link_libraries(loomwright_core PRIVATE "$<LINK_ONLY:PkgConfig::WAYLAND>")
+endif()
 if(LOOMWRIGHT_WAYLAND AND GTK3_FOUND AND WAYLAND_FOUND)
-    # Only the isolated helper uses toolkit headers/flags. The rest of the
+    # Only the isolated helpers use toolkit headers/flags. The rest of the
     # core and its consumers only need the final link dependencies.
-    target_link_libraries(loomwright_wayland PRIVATE PkgConfig::GTK3 PkgConfig::WAYLAND)
-    target_link_libraries(loomwright_core PRIVATE "$<LINK_ONLY:PkgConfig::GTK3>" "$<LINK_ONLY:PkgConfig::WAYLAND>")
+    target_link_libraries(loomwright_wayland PRIVATE PkgConfig::GTK3)
+    target_link_libraries(loomwright_core PRIVATE "$<LINK_ONLY:PkgConfig::GTK3>")
     target_compile_definitions(loomwright_wayland PRIVATE LOOMWRIGHT_WAYLAND_GUI=1)
-    message(STATUS "loomwright: native Wayland panels enabled (GTK3)")
+    message(STATUS "loomwright: native Wayland panels and picker enabled (GTK3)")
 elseif(NOT LOOMWRIGHT_WAYLAND)
-    message(STATUS "loomwright: native Wayland panels disabled")
+    message(STATUS "loomwright: native Wayland panels and picker disabled")
 else()
-    message(STATUS "loomwright: native Wayland panels unavailable (GTK3/wayland-client development files missing)")
+    message(STATUS "loomwright: native Wayland panels and picker unavailable (GTK3/wayland-client development files missing)")
+endif()
+
+# The active-window query uses the unstable wlroots toplevel-management
+# protocol. Generate its bindings only when wayland-scanner is installed;
+# without it the query reports "no source" instead of failing to build.
+if(LOOMWRIGHT_WAYLAND AND WAYLAND_FOUND)
+    find_program(WAYLAND_SCANNER wayland-scanner)
+    if(WAYLAND_SCANNER)
+        set(toplevel_xml "${CMAKE_SOURCE_DIR}/protocol/wlr-foreign-toplevel-management-unstable-v1.xml")
+        set(toplevel_header "${CMAKE_CURRENT_BINARY_DIR}/generated/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h")
+        set(toplevel_source "${CMAKE_CURRENT_BINARY_DIR}/generated/wlr-foreign-toplevel-management-unstable-v1-client-protocol.c")
+        add_custom_command(
+            OUTPUT "${toplevel_header}" "${toplevel_source}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+            COMMAND "${WAYLAND_SCANNER}" client-header "${toplevel_xml}" "${toplevel_header}"
+            COMMAND "${WAYLAND_SCANNER}" private-code "${toplevel_xml}" "${toplevel_source}"
+            DEPENDS "${toplevel_xml}"
+            VERBATIM)
+        # Keep the generated C file in its own target: the C++-only warning
+        # flags in loomwright_options do not apply to C sources.
+        add_library(loomwright_wlr_protocol OBJECT "${toplevel_source}")
+        target_include_directories(loomwright_wlr_protocol PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        target_sources(loomwright_core PRIVATE $<TARGET_OBJECTS:loomwright_wlr_protocol>)
+        target_include_directories(loomwright_wayland PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        target_compile_definitions(loomwright_wayland PRIVATE LOOMWRIGHT_WAYLAND_TOPLEVEL=1)
+        message(STATUS "loomwright: native Wayland active-window query enabled (wlroots toplevel protocol)")
+    else()
+        message(STATUS "loomwright: native Wayland active-window query disabled (wayland-scanner missing)")
+    endif()
 endif()
 target_compile_definitions(loomwright_core PUBLIC LOOMWRIGHT_VERSION="${PROJECT_VERSION}")
 
@@ -269,10 +303,15 @@ if(BUILD_TESTING)
         tests/test_runtime_language.cpp
         tests/test_backends.cpp
         tests/test_mousepos.cpp
+        tests/test_broker.cpp
         tests/test_scheduler.cpp)
     target_link_libraries(loomwright_tests PRIVATE loomwright_core loomwright_test_options)
     target_compile_definitions(loomwright_tests PRIVATE LOOMWRIGHT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     add_test(NAME loomwright_tests COMMAND loomwright_tests)
+
+    add_test(NAME keytable_integration
+        COMMAND bash ${CMAKE_SOURCE_DIR}/tests/keytable_integration.sh)
+    set_tests_properties(keytable_integration PROPERTIES TIMEOUT 20)
 
     # A synthetic benchmark for the front end and the runtime. It is not a
     # test: it prints timings so a change to the code generation can be
@@ -321,6 +360,11 @@ if(BUILD_TESTING)
                 LOOMWRIGHT_TEST_HOOKS=1
                 bash ${CMAKE_SOURCE_DIR}/tests/wayland_integration.sh)
         set_tests_properties(wayland_integration PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120 RESOURCE_LOCK graphical_integration)
+        add_test(NAME wayland_native_integration
+            COMMAND ${CMAKE_COMMAND} -E env
+                LOOMWRIGHT_BIN=$<TARGET_FILE:loomwright>
+                bash ${CMAKE_SOURCE_DIR}/tests/wayland_native_integration.sh)
+        set_tests_properties(wayland_native_integration PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120 RESOURCE_LOCK graphical_integration)
     endif()
     # A probe for a recoverable alternative to Xlib's fatal I/O behavior.
     add_executable(xcb_disconnect_probe tests/xcb_disconnect_probe.cpp)

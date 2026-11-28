@@ -134,6 +134,28 @@ struct FailReleaseBackend : RecordingBackend {
     }
 };
 
+struct FailFirstAcquireBackend : RecordingBackend {
+    bool fail_down = true;
+    void key(const std::string& name, bool down) override {
+        if (down && fail_down) {
+            fail_down = false;
+            throw BackendError("key press failed");
+        }
+        RecordingBackend::key(name, down);
+    }
+};
+
+struct FailOnceKeyReleaseBackend : RecordingBackend {
+    bool fail_up = true;
+    void key(const std::string& name, bool down) override {
+        if (!down && fail_up) {
+            fail_up = false;
+            throw BackendError("key release failed");
+        }
+        RecordingBackend::key(name, down);
+    }
+};
+
 }  // namespace
 
 TEST_CASE(shared_output_snapshot_survives_failed_release) {
@@ -151,6 +173,35 @@ TEST_CASE(shared_output_snapshot_survives_failed_release) {
     arbiter.clear();  // failed injections must not throw or leave stale state
     CHECK_TRUE(arbiter.held().empty());
     CHECK_EQ(backend.log, (std::vector<std::string>{"key A down", "button RIGHT down"}));
+}
+
+TEST_CASE(shared_output_failed_acquire_does_not_leave_a_claim) {
+    FailFirstAcquireBackend backend;
+    OutputArbiter arbiter(backend);
+    CHECK_THROWS(arbiter.acquire(1, OutputKind::Key, "A"), BackendError);
+    // A down that never reached the backend must not be treated as a held key;
+    // the next claimant has to inject its own down.
+    CHECK_TRUE(arbiter.held().empty());
+    CHECK_TRUE(!arbiter.is_held(OutputKind::Key, "A"));
+    CHECK_TRUE(arbiter.acquire(2, OutputKind::Key, "A"));
+    CHECK_TRUE(arbiter.release(2, OutputKind::Key, "A"));
+    CHECK_TRUE(!arbiter.is_held(OutputKind::Key, "A"));
+    CHECK_EQ(backend.log, (std::vector<std::string>{"key A down", "key A up"}));
+}
+
+TEST_CASE(shared_output_failed_release_keeps_claim_for_retry) {
+    FailOnceKeyReleaseBackend backend;
+    OutputArbiter arbiter(backend);
+    CHECK_TRUE(arbiter.acquire(1, OutputKind::Key, "A"));
+    CHECK_THROWS(arbiter.release(1, OutputKind::Key, "A"), BackendError);
+    // The physical key is still down, so the name must stay claimed until an
+    // up is actually injected (or the departing client is dropped).
+    CHECK_TRUE(arbiter.is_held(OutputKind::Key, "A"));
+    CHECK_EQ(arbiter.owners(OutputKind::Key, "A"), 1);
+    CHECK_EQ(backend.log, (std::vector<std::string>{"key A down"}));
+    CHECK_TRUE(arbiter.release(1, OutputKind::Key, "A"));
+    CHECK_TRUE(!arbiter.is_held(OutputKind::Key, "A"));
+    CHECK_EQ(backend.log, (std::vector<std::string>{"key A down", "key A up"}));
 }
 
 
@@ -310,6 +361,20 @@ Task drive_hold_then_release(Runtime& runtime, std::string key, double hold_seco
     co_await sleep_for(0.3);
 }
 
+/// Rapid re-press before the cancelled held frame has unwound. The second held
+/// task reuses the same (key, line) identity as the first one.
+Task drive_rapid_repress(Runtime& runtime, std::string key) {
+    for (int round = 0; round < 2; ++round) {
+        runtime.physical_key("fake-keyboard", key, true);
+        co_await sleep_for(0.005);
+        runtime.physical_key("fake-keyboard", key, false);
+        runtime.physical_key("fake-keyboard", key, true);
+        co_await sleep_for(0.13);
+    }
+    runtime.physical_key("fake-keyboard", key, false);
+    co_await sleep_for(0.1);
+}
+
 struct PointerRecorder : OutputBackend {
     std::vector<std::string>* log;
     explicit PointerRecorder(std::vector<std::string>* target) : log(target) {}
@@ -408,6 +473,31 @@ loom "cancel-tap" {
     // The tap is cancelled while its sleep is still pending: the key must be
     // released exactly once, and no orphaned frame may keep tapping.
     CHECK_EQ(raw->log, std::vector<std::string>({"key E down", "key E up"}));
+}
+
+TEST_CASE(rapid_repress_does_not_leave_an_uncancelled_held_loop) {
+    const Script script = parse(R"LOOMWRIGHT(
+ loom "repress" {
+     when key X stays held every 40ms {
+         key E tap for 1ms
+     }
+ }
+ )LOOMWRIGHT");
+    Runtime runtime(script, Runtime::Options{});
+    auto backend = std::make_unique<RecordingBackend>();
+    RecordingBackend* raw = backend.get();
+    runtime.set_backend(std::move(backend));
+    runtime.set_panic_key("");
+
+    runtime.scheduler().spawn(drive_rapid_repress(runtime, "X"));
+    runtime.scheduler().run();
+
+    const auto ticks = static_cast<size_t>(std::count(raw->log.begin(), raw->log.end(), "key E down"));
+    // Two ~130ms holds at 40ms give three ticks each. An old held frame whose
+    // guard erased the replacement's bookkeeping would keep ticking alongside
+    // the new one and roughly double the second round.
+    CHECK_TRUE(ticks >= 4);
+    CHECK_TRUE(ticks <= 8);
 }
 
 TEST_CASE(two_spots_press_and_release_logic) {

@@ -49,6 +49,10 @@ done
 grep -q registered "$dir/first.log"
 grep -q registered "$dir/second.log"
 [[ -S $dir/loomwright-input.sock ]]
+status=$("$bin" --broker)
+grep -q 'Scripts (2):' <<<"$status"
+grep -q '"shared startup"' <<<"$status"
+grep -q 'Conflicts: none' <<<"$status"
 kill -TERM "$first" "$second"
 wait "$first"
 first=
@@ -59,4 +63,5 @@ for ((i=0; i<200; i++)); do
     sleep 0.02
 done
 [[ ! -S $dir/loomwright-input.sock ]]
-echo 'ok   simultaneous CLI startup recovered a stale socket; the broker exited after both scripts'
+"$bin" --broker | grep -q 'not running'
+echo 'ok   simultaneous CLI startup recovered a stale socket; --broker listed both scripts and the broker exited'

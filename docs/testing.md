@@ -13,14 +13,19 @@ For release packaging and Podman CI testing, see [releases.md](releases.md).
 | `tests/test_runtime_language.cpp` | Runtime language features (lists, functions, flow) |
 | `tests/test_backends.cpp` | Output backends and `UInputDevice` setup/buffer behaviour |
 | `tests/test_mousepos.cpp` | Picker helpers (coordinate formatting, tooltip placement, screenshot commands) and CLI argument/exit-code tests |
+| `tests/test_broker.cpp` | `--broker` parsing, conflict detection and report formatting from a fabricated `BrokerStatus` snapshot |
 | `tests/test_scheduler.cpp` | Scheduler tasks, timers, fds, cancellation, shutdown, flat-stack invariant |
 | `tests/runtime_fixtures.hpp` | Shared fixtures for the runtime tests |
 | `tests/evdev_handoff.cpp` | Real evdev/uinput handoff and shared-input broker tests (skip when isolation cannot be confirmed) |
 | `tests/output_broker.cpp` | Real broker with a recording output backend: overlapping key/button claims, held-state snapshots, client death |
 | `tests/picker_integration.sh` | End-to-end `--get-mouse-pos` test on a private X server |
+| `tests/wayland_native_integration.sh` | Native picker and active-window queries on headless Weston, no X display |
 | `tests/gui_integration.sh` | Real GUI/panel/timer/dry-run test on a private X server |
 | `tests/uinput_fault_integration.sh` | Real `/dev/uinput` ioctl fault injection via `LD_PRELOAD` |
 | `tests/uinput_ioctl_fault_shim.c` | The ioctl fault-injection shim |
+| `tests/keytable_integration.sh` | Golden-output regression for `scripts/gen-keytable.sh` on a synthetic header |
+| `tests/keytable_fixture.h` | Synthetic `input-event-codes.h` with aliases, hex/decimal values and duplicate codes |
+| `tests/keytable_expected.inc` | Golden `keys.inc` output for that fixture |
 | `tests/*_probe.cpp` | Deterministic fault and lifecycle probes used by the integration scripts |
 
 The unit tests are one executable, `loomwright_tests`. The integration tests are
@@ -49,27 +54,35 @@ installs Xvfb, xdotool and ImageMagick to exercise the headless GUI and picker t
 device-dependent tests can still skip on hosted runners without `/dev/uinput`.
 Native Wayland integration starts an isolated headless Weston compositor when
 Weston and the optional GTK3/wayland-client build dependencies are available.
+CI runs those cases in a separate Weston job on the same Ubuntu image; it uses
+GCC, builds with two parallel jobs and a shared ccache, and runs only the
+Wayland CTest cases plus the unit tests.
 
 ### CTest tests
 
 | Test | What it covers | Skip code |
 | --- | --- | --- |
 | `loomwright_tests` | All unit tests | — |
+| `keytable_integration` | Generator output matches the golden table and rejects a truncated header | — |
 | `evdev_handoff` | Split evdev/uinput handoff against real kernel devices | 77 |
 | `evdev_shared_broker` | Shared capture, suppression, delivery and cleanup on isolated kernel devices | 77 |
-| `shared_input_cli` | Concurrent CLI launch, stale-socket recovery, and idle exit without opening a physical keyboard | — |
+| `shared_input_cli` | Concurrent CLI launch, stale-socket recovery, `--broker` live and idle output, and idle exit without opening a physical keyboard | — |
 | `output_broker` | Overlapping synthetic key/button claims, single injection, held-state snapshots and client death against a real broker | — |
 | `picker_integration` | `--get-mouse-pos` on a private X server, 24-bit | 77 |
 | `picker_integration_16` | Same, 16-bit (only when Xvfb is found) | 77 |
 | `gui_integration` | GUI panels, layout switches, close/destroy/server-loss | 77 |
 | `wayland_integration` | Native panels and compositor selection on headless Weston | 77 |
+| `wayland_native_integration` | Native picker and active-window queries on headless Weston, with stubbed screenshot tools | 77 |
 | `uinput_fault_integration` | ioctl failure at every named `UInputDevice` setup step | 77 |
 
 Exit code 77 means "skipped" (missing X server, xdotool, screenshot tool,
 `/dev/uinput`, or an unconfirmed isolation precondition), not a failure.
 The picker variants use disjoint display ranges but share screenshot tools.
-They, the X11 GUI test and the Wayland test share the `graphical_integration`
-resource lock to avoid compositor startup starvation on small CI runners.
+They, the X11 GUI test and both Wayland tests share the `graphical_integration`
+resource lock to avoid compositor startup starvation on small CI runners. The
+native Wayland test stubs every known screenshot tool so it also works on
+compositors without screencopy support, and uses the picker's deterministic
+event hooks instead of injecting input.
 The X11 keyboard mapping probe synchronizes with the test driver and
 acknowledges each layout switch only after its focused input decodes the test
 key under the new layout. It does not depend on fixed settle delays.

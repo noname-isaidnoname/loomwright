@@ -8,16 +8,21 @@
 #include <linux/input.h>
 #include <map>
 #include <poll.h>
+#include <set>
 #include <signal.h>
+#include <sstream>
 #include <sys/file.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>
 #include <system_error>
+#include <tuple>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 #include "backends.hpp"
 #include "input.hpp"
+#include "keys.hpp"
 #include "runtime_internal.hpp"
 
 namespace loomwright {
@@ -42,10 +47,14 @@ void OutputArbiter::inject(OutputKind kind, const std::string& name, bool down) 
 }
 
 bool OutputArbiter::acquire(int owner, OutputKind kind, const std::string& name) {
-    auto& members = owners_[{kind, name}];
-    const bool first = members.empty();
-    members.insert(owner);
+    const Claim claim{kind, name};
+    const auto found = owners_.find(claim);
+    const bool first = found == owners_.end() || found->second.empty();
+    if (!first && found->second.contains(owner)) return false;
+    // Inject before recording the claim: a down that never reached the backend
+    // must not be mirrored as held, or the next claimant would skip its down.
     if (first) inject(kind, name, true);
+    owners_[claim].insert(owner);
     return first;
 }
 
@@ -53,8 +62,16 @@ bool OutputArbiter::release(int owner, OutputKind kind, const std::string& name)
     const auto found = owners_.find({kind, name});
     if (found == owners_.end() || found->second.erase(owner) == 0) return false;
     if (!found->second.empty()) return false;
+    try {
+        inject(kind, name, false);
+    } catch (...) {
+        // The physical key is still down. Keep the claim so a later release,
+        // client drop or broker shutdown can retry the up instead of leaving a
+        // stuck key behind.
+        found->second.insert(owner);
+        throw;
+    }
     owners_.erase(found);
-    inject(kind, name, false);
     return true;
 }
 
@@ -101,8 +118,220 @@ int OutputArbiter::owners(OutputKind kind, const std::string& name) const {
     return found == owners_.end() ? 0 : static_cast<int>(found->second.size());
 }
 
+std::vector<int> OutputArbiter::owner_ids(OutputKind kind, const std::string& name) const {
+    const auto found = owners_.find({kind, name});
+    if (found == owners_.end()) return {};
+    return {found->second.begin(), found->second.end()};
+}
+
 bool OutputArbiter::is_held(OutputKind kind, const std::string& name) const {
     return owners(kind, name) > 0;
+}
+
+namespace {
+
+std::string quoted(const std::string& text) { return "\"" + text + "\""; }
+
+std::string script_name(const std::string& name) { return quoted(name.empty() ? "(unnamed)" : name); }
+
+std::string key_label(int code) {
+    if (const auto name = normalize_key_event(code)) return *name;
+    return "KEY_" + std::to_string(code);
+}
+
+std::string device_label(const std::string& path, const std::string& name) {
+    return name.empty() ? path : path + " (" + name + ")";
+}
+
+std::string claim_label(const BrokerStatusClaim& claim) {
+    return std::string(claim.kind == OutputKind::Button ? "button " : "key ") + claim.name;
+}
+
+std::string join_quoted(const std::set<std::string>& names) {
+    std::string result;
+    for (const auto& name : names) {
+        if (!result.empty()) result += ", ";
+        result += script_name(name);
+    }
+    return result;
+}
+
+std::string join_labels(const std::set<std::string>& labels) {
+    std::string result;
+    for (const auto& label : labels) {
+        if (!result.empty()) result += ", ";
+        result += label;
+    }
+    return result;
+}
+
+std::string join_keys(const std::set<int>& codes) {
+    std::string result;
+    for (int code : codes) {
+        if (!result.empty()) result += ", ";
+        result += key_label(code);
+    }
+    return result;
+}
+
+/// path → code → scripts, built only from devices the broker still owns.
+std::map<std::string, std::map<int, std::set<std::string>>> consumption(const BrokerStatus& status) {
+    std::set<std::string> paths;
+    for (const auto& device : status.devices) paths.insert(device.path);
+    std::map<std::string, std::map<int, std::set<std::string>>> result;
+    for (const auto& client : status.clients) {
+        for (const auto& path : client.devices) {
+            if (!paths.contains(path)) continue;
+            for (int code : client.consume) result[path][code].insert(client.name);
+        }
+    }
+    return result;
+}
+
+}  // namespace
+
+std::vector<BrokerConflict> broker_conflicts(const BrokerStatus& status) {
+    std::map<std::string, std::string> device_names;
+    for (const auto& device : status.devices) device_names[device.path] = device.name;
+
+    std::vector<BrokerConflict> conflicts;
+    for (const auto& [path, keys] : consumption(status)) {
+        for (const auto& [code, scripts] : keys) {
+            if (scripts.size() < 2) continue;
+            const auto name = device_names.find(path);
+            const std::string label = device_label(path, name == device_names.end() ? std::string() : name->second);
+            conflicts.push_back({"consume", key_label(code), label, {scripts.begin(), scripts.end()}});
+        }
+    }
+    for (const auto& claim : status.claims) {
+        const std::set<std::string> owners(claim.owners.begin(), claim.owners.end());
+        if (owners.size() < 2) continue;
+        conflicts.push_back({"hold", claim_label(claim), "synthetic output", {owners.begin(), owners.end()}});
+    }
+    std::ranges::sort(conflicts, [](const BrokerConflict& left, const BrokerConflict& right) {
+        return std::tie(left.kind, left.device, left.key) < std::tie(right.kind, right.device, right.key);
+    });
+    return conflicts;
+}
+
+std::string format_broker_status(const BrokerStatus& status) {
+    std::ostringstream out;
+    out << "Shared input broker: running (protocol " << status.protocol << ")\n";
+
+    auto clients = status.clients;
+    std::ranges::sort(clients, [](const BrokerStatusClient& left, const BrokerStatusClient& right) {
+        return left.name < right.name;
+    });
+    if (clients.empty()) {
+        out << "Scripts: none\n";
+    } else {
+        out << "Scripts (" << clients.size() << "):\n";
+        for (const auto& client : clients) {
+            out << "  " << script_name(client.name);
+            if (!client.devices.empty()) {
+                out << " — ";
+                bool first = true;
+                for (const auto& path : client.devices) {
+                    if (!first) out << ", ";
+                    first = false;
+                    out << path;
+                }
+            }
+            out << "\n";
+            if (!client.consume.empty()) {
+                std::set<int> codes(client.consume.begin(), client.consume.end());
+                out << "    consumes: " << join_keys(codes) << "\n";
+            }
+            if (!client.panic.empty()) {
+                std::set<int> codes(client.panic.begin(), client.panic.end());
+                out << "    panic: " << join_keys(codes) << "\n";
+            }
+            std::set<std::string> held;
+            for (const auto& claim : status.claims) {
+                if (std::ranges::find(claim.owners, client.name) != claim.owners.end())
+                    held.insert(claim_label(claim) + " (" + std::to_string(claim.owners.size()) + " script(s))");
+            }
+            if (!held.empty()) out << "    holds: " << join_labels(held) << "\n";
+        }
+    }
+
+    auto devices = status.devices;
+    std::ranges::sort(devices, [](const BrokerStatusDevice& left, const BrokerStatusDevice& right) {
+        return left.path < right.path;
+    });
+    const auto owned = consumption(status);
+    if (devices.empty()) {
+        out << "Devices: none\n";
+    } else {
+        out << "Devices (" << devices.size() << "):\n";
+        for (const auto& device : devices) {
+            const char* kind = device.keyboard ? "keyboard" : device.mouse ? "mouse" : "other input";
+            out << "  " << device.path << ": " << (device.name.empty() ? "unknown" : device.name) << " — " << kind;
+            if (device.grabbed) out << ", grabbed";
+            out << "\n";
+            if (!device.down.empty()) {
+                std::set<int> down(device.down.begin(), device.down.end());
+                out << "    down: " << join_keys(down) << "\n";
+            }
+            const auto found = owned.find(device.path);
+            if (found != owned.end()) {
+                std::map<std::string, std::set<int>> by_script;
+                for (const auto& [code, scripts] : found->second)
+                    for (const auto& script : scripts) by_script[script].insert(code);
+                out << "    consumed by: ";
+                bool first = true;
+                for (const auto& [script, codes] : by_script) {
+                    if (!first) out << ", ";
+                    first = false;
+                    out << script_name(script) << " (" << join_keys(codes) << ")";
+                }
+                out << "\n";
+            }
+        }
+    }
+
+    size_t claims = 0;
+    for (const auto& [_, keys] : owned) claims += keys.size();
+    claims += status.claims.size();
+    if (claims == 0) {
+        out << "Claimed keys: none\n";
+    } else {
+        out << "Claimed keys (" << claims << "):\n";
+        for (const auto& [path, keys] : owned) {
+            std::string name;
+            for (const auto& device : status.devices)
+                if (device.path == path) name = device.name;
+            for (const auto& [code, scripts] : keys)
+                out << "  " << key_label(code) << " (consume, " << device_label(path, name)
+                    << "): " << join_quoted(scripts) << "\n";
+        }
+        auto ordered = status.claims;
+        std::ranges::sort(ordered, [](const BrokerStatusClaim& left, const BrokerStatusClaim& right) {
+            return std::tie(left.kind, left.name) < std::tie(right.kind, right.name);
+        });
+        for (const auto& claim : ordered) {
+            const std::set<std::string> owners(claim.owners.begin(), claim.owners.end());
+            out << "  " << claim.name << " (held "
+                << (claim.kind == OutputKind::Button ? "button" : "key") << "): " << join_quoted(owners) << "\n";
+        }
+    }
+
+    const auto conflicts = broker_conflicts(status);
+    if (conflicts.empty()) {
+        out << "Conflicts: none\n";
+    } else {
+        out << "Conflicts (" << conflicts.size() << "):\n";
+        for (const auto& conflict : conflicts) {
+            out << "  ";
+            if (conflict.kind == "consume") out << "key ";
+            out << conflict.key << " on " << conflict.device;
+            if (conflict.kind == "consume") out << ": consumed by ";
+            else out << ": held by ";
+            const std::set<std::string> scripts(conflict.scripts.begin(), conflict.scripts.end());
+            out << join_quoted(scripts) << "\n";
+        }
+    }
+    return out.str();
 }
 
 namespace {
@@ -114,6 +343,7 @@ struct Client {
     Clock::time_point deadline;
     bool registered = false;
     bool dead = false;
+    std::string name;
     std::set<int> consume;
     std::set<int> panic;
     std::set<dev_t> devices;
@@ -151,6 +381,7 @@ public:
 private:
     void accept_client(int listener);
     void request(Client& client);
+    void send_status(Client& client);
     void register_client(Client& client, Packet& packet);
     void fail_client(Client& client, const std::string& detail);
     void maintain();
@@ -285,7 +516,10 @@ void Server::accept_client(int listener) {
     UniqueFd fd(::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK));
     if (fd.get() < 0 || !same_user(fd.get()) || clients_.size() >= 128) return;
     const int key = fd.get();
-    clients_.try_emplace(key, Client{std::move(fd), Clock::now() + 10s, false, false, {}, {}, {}});
+    Client client;
+    client.fd = std::move(fd);
+    client.deadline = Clock::now() + 10s;
+    clients_.try_emplace(key, std::move(client));
 }
 
 void Server::fail_client(Client& client, const std::string& detail) {
@@ -312,6 +546,77 @@ OutputArbiter& Server::ensure_output() {
     return *output_;
 }
 
+void Server::send_status(Client& client) {
+    // A status probe is not a subscriber: it sees a consistent snapshot of the
+    // current clients and devices, then leaves. Nothing here changes claims.
+    Packet reply(Message::StatusReply);
+    reply.number(kProtocol);
+
+    std::vector<const Client*> clients;
+    for (const auto& [_, entry] : clients_)
+        if (entry.registered && !entry.dead) clients.push_back(&entry);
+    std::ranges::sort(clients, [](const Client* left, const Client* right) {
+        if (left->name != right->name) return left->name < right->name;
+        return left->fd.get() < right->fd.get();
+    });
+    reply.number(static_cast<int32_t>(clients.size()));
+    for (const Client* entry : clients) {
+        reply.text(entry->name);
+        std::vector<std::string> paths;
+        for (dev_t id : entry->devices) {
+            const auto found = devices_.find(id);
+            if (found != devices_.end()) paths.push_back(found->second.input->path());
+        }
+        std::ranges::sort(paths);
+        reply.number(static_cast<int32_t>(paths.size()));
+        for (const auto& path : paths) reply.text(path);
+        reply.codes(entry->consume);
+        reply.codes(entry->panic);
+    }
+
+    std::vector<const Device*> devices;
+    for (const auto& [_, device] : devices_) devices.push_back(&device);
+    std::ranges::sort(devices, [](const Device* left, const Device* right) {
+        return left->input->path() < right->input->path();
+    });
+    reply.number(static_cast<int32_t>(devices.size()));
+    for (const Device* device : devices) {
+        reply.text(device->input->path());
+        reply.text(device->input->name());
+        reply.number(device->keyboard ? 1 : 0);
+        reply.number(device->mouse ? 1 : 0);
+        reply.number(device->replay ? 1 : 0);
+        reply.codes(device->down);
+    }
+
+    std::vector<OutputState> claims = output_ ? output_->held() : std::vector<OutputState>{};
+    std::ranges::sort(claims, [](const OutputState& left, const OutputState& right) {
+        return std::tie(left.kind, left.name) < std::tie(right.kind, right.name);
+    });
+    reply.number(static_cast<int32_t>(claims.size()));
+    for (const auto& claim : claims) {
+        reply.number(std::to_underlying(claim.kind));
+        reply.text(claim.name);
+        std::vector<std::string> owners;
+        for (int id : output_->owner_ids(claim.kind, claim.name)) {
+            const auto found = clients_.find(id);
+            if (found != clients_.end() && found->second.registered && !found->second.dead)
+                owners.push_back(found->second.name);
+        }
+        std::ranges::sort(owners);
+        reply.number(static_cast<int32_t>(owners.size()));
+        for (const auto& name : owners) reply.text(name);
+    }
+
+    if (reply.bytes().size() > kMaxPacket) {
+        Packet error(Message::Error);
+        error.text("Too many broker clients for a status snapshot");
+        (void)broker::send(client.fd.get(), error);
+        return;
+    }
+    (void)broker::send(client.fd.get(), reply);
+}
+
 void Server::broadcast_output_state(const OutputState& state) {
     Packet packet(Message::OutputState);
     packet.number(std::to_underlying(state.kind));
@@ -334,7 +639,11 @@ void Server::request(Client& client) {
             return;
         }
         const auto type = packet->type();
-        if (type == Message::Probe && !client.registered) {
+        if (type == Message::Status && !client.registered) {
+            packet->finish();
+            send_status(client);
+            disconnect_client(client);
+        } else if (type == Message::Probe && !client.registered) {
             packet->finish();
             disconnect_client(client);
         } else if (type == Message::OutputClaim) {
@@ -362,6 +671,7 @@ void Server::request(Client& client) {
 void Server::register_client(Client& client, Packet& packet) {
     if (packet.number() != kProtocol)
         throw RuntimeErrorLoomwright("Incompatible input broker; stop older Loomwright instances and retry");
+    client.name = packet.text();
     const auto requested = packet.text();
     if (!requested.empty() && requested.front() != '/') Packet::invalid();
     const auto flags = packet.count(3);

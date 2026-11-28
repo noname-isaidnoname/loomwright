@@ -68,3 +68,42 @@ jobs:
       - run: make JOBS=2
       - name: Report the compiler
         run: ${CXX} --version
+
+  # A small, separate job exercises the native Wayland paths on a headless
+  # compositor. It builds once with GCC and runs only the Wayland-related CTest
+  # cases; the main matrix already covers the full suite on both compilers.
+  wayland:
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        timeout-minutes: 15
+        run: |
+          apt_options=(-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+          apt_try() {
+            local attempt=1
+            while (( attempt <= 4 )); do
+              if sudo timeout 240 apt-get "${apt_options[@]}" "$@"; then return 0; fi
+              echo "apt attempt $attempt failed; retrying with cached downloads" >&2
+              sudo dpkg --configure -a || true
+              ((attempt++))
+            done
+            return 1
+          }
+          apt_try update
+          apt_try install -y --no-install-recommends \
+            ninja-build ccache libx11-dev libxcb1-dev libpng-dev libgtk-3-dev libwayland-dev weston
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-24.04-wayland-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-24.04-wayland-ccache-
+      - name: Build with Wayland integration tests
+        run: |
+          cmake --preset release -DBUILD_TESTING=ON
+          cmake --build build/release -j 2
+      - name: Native Wayland integration tests
+        run: ctest --preset release --output-on-failure -R '^(loomwright_tests|wayland_integration|wayland_native_integration)$'

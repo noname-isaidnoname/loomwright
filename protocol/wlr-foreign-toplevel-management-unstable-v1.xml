@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Wire-format definition of the wlroots foreign toplevel management protocol,
+  unstable version 1. Wayland uses declaration order as the opcode numbers, so
+  this definition must keep the upstream order of events and requests even
+  though Loomwright only uses a subset of them.
+-->
+<protocol name="wlr_foreign_toplevel_management_unstable_v1">
+  <interface name="zwlr_foreign_toplevel_manager_v1" version="1">
+    <description summary="get handles for toplevels">
+      Enumerates the toplevels known to the compositor. Compositors that do not
+      implement this protocol simply never advertise the global.
+    </description>
+    <event name="toplevel">
+      <arg name="toplevel" type="new_id" interface="zwlr_foreign_toplevel_handle_v1"/>
+    </event>
+    <event name="finished"/>
+    <request name="stop"/>
+  </interface>
+
+  <interface name="zwlr_foreign_toplevel_handle_v1" version="1">
+    <description summary="a toplevel window">
+      Properties of one toplevel. Loomwright reads the title, app_id and
+      activation state; there is no PID on this protocol.
+    </description>
+    <event name="title">
+      <arg name="title" type="string"/>
+    </event>
+    <event name="app_id">
+      <arg name="app_id" type="string"/>
+    </event>
+    <event name="output_enter">
+      <arg name="output" type="object" interface="wl_output"/>
+    </event>
+    <event name="output_leave">
+      <arg name="output" type="object" interface="wl_output"/>
+    </event>
+    <event name="state">
+      <arg name="state" type="array"/>
+    </event>
+    <event name="done"/>
+    <event name="closed"/>
+    <request name="destroy" type="destructor"/>
+    <request name="set_maximized"/>
+    <request name="unset_maximized"/>
+    <request name="set_minimized"/>
+    <request name="unset_minimized"/>
+    <request name="activate">
+      <arg name="seat" type="object" interface="wl_seat"/>
+    </request>
+    <request name="close"/>
+    <enum name="state">
+      <entry name="maximized" value="0"/>
+      <entry name="minimized" value="1"/>
+      <entry name="activated" value="2"/>
+      <entry name="fullscreen" value="3"/>
+    </enum>
+  </interface>
+</protocol>
