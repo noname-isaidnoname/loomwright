@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "backends.hpp"
+#include "input_broker_protocol.hpp"
 #include "keys.hpp"
 #include "parser.hpp"
 #include "runtime.hpp"
@@ -25,6 +26,44 @@
 using namespace loomwright;
 using loomwright_test::eval_expression;
 using loomwright_test::RecordingBackend;
+
+TEST_CASE(shared_input_keeps_suppression_decisions_until_key_up) {
+    InputSuppression filter;
+    filter.configure({KEY_A}, {});
+    CHECK_TRUE(filter.filter({EV_KEY, KEY_A, 1}));
+    CHECK_TRUE(!filter.filter({EV_KEY, KEY_B, 1}));
+    filter.configure({KEY_B}, {});
+    CHECK_TRUE(filter.filter({EV_KEY, KEY_A, 2}));
+    CHECK_TRUE(filter.filter({EV_KEY, KEY_A, 0}));
+    CHECK_TRUE(!filter.filter({EV_KEY, KEY_B, 2}));
+    CHECK_TRUE(!filter.filter({EV_KEY, KEY_B, 0}));
+    CHECK_TRUE(filter.filter({EV_KEY, KEY_B, 1}));
+    filter.configure({KEY_B}, {KEY_B});
+    CHECK_TRUE(filter.filter({EV_KEY, KEY_B, 0}));
+    CHECK_TRUE(!filter.filter({EV_KEY, KEY_B, 1}));
+    CHECK_TRUE(!filter.filter({EV_SYN, SYN_REPORT, 0}));
+}
+
+TEST_CASE(shared_input_packet_framing_and_validation) {
+    int fds[2];
+    CHECK_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds), 0);
+    UniqueFd first(fds[0]), second(fds[1]);
+    CHECK_TRUE(!broker::receive(second.get()));
+    broker::Packet outgoing(broker::Message::Device);
+    outgoing.text("abc");
+    outgoing.codes(std::vector{KEY_A, KEY_B});
+    CHECK_TRUE(broker::send(first.get(), outgoing));
+    auto received = broker::receive(second.get());
+    CHECK_TRUE(received.has_value());
+    CHECK_TRUE(received->type() == broker::Message::Device);
+    CHECK_EQ(received->text(), std::string("abc"));
+    CHECK_TRUE(broker::read_codes(*received) == (std::vector{KEY_A, KEY_B}));
+    received->finish();
+    CHECK_THROWS(received->number(), RuntimeErrorLoomwright);
+    broker::Packet invalid;
+    invalid.codes(std::vector{KEY_MAX + 1});
+    CHECK_THROWS(broker::read_codes(invalid), RuntimeErrorLoomwright);
+}
 
 
 namespace {

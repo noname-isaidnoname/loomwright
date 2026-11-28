@@ -55,6 +55,8 @@ Weston and the optional GTK3/wayland-client build dependencies are available.
 | --- | --- | --- |
 | `loomwright_tests` | All unit tests | — |
 | `evdev_handoff` | Split evdev/uinput handoff against real kernel devices | 77 |
+| `evdev_shared_broker` | Shared capture, suppression, delivery and cleanup on isolated kernel devices | 77 |
+| `shared_input_cli` | Concurrent CLI launch, stale-socket recovery, and idle exit without opening a physical keyboard | — |
 | `picker_integration` | `--get-mouse-pos` on a private X server, 24-bit | 77 |
 | `picker_integration_16` | Same, 16-bit (only when Xvfb is found) | 77 |
 | `gui_integration` | GUI panels, layout switches, close/destroy/server-loss | 77 |

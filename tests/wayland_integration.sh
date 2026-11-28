@@ -41,7 +41,7 @@ loom "native-test" {
 }
 EOF
 run_script() {
-    "$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run >"$dir/out" 2>&1 &
+    "$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run --input-mode direct >"$dir/out" 2>&1 &
     app=$!
     for _ in $(seq 1 400); do
         grep -q native-script-started "$dir/out" && break
@@ -63,12 +63,12 @@ export WAYLAND_SOCKET=999999
 run_script
 unset WAYLAND_SOCKET
 stage='strict compositor selection'
-if XDG_SESSION_TYPE=x11 "$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run >"$dir/out" 2>&1; then
+if XDG_SESSION_TYPE=x11 "$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run --input-mode direct >"$dir/out" 2>&1; then
     echo 'explicit Wayland unexpectedly accepted an X11 session' >&2; exit 1
 fi
 grep -q 'cannot run in an X11 session' "$dir/out"
 sed -i 's/compositor = "wayland"/compositor = "x11"/' "$dir/script.loom"
-if "$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run >"$dir/out" 2>&1; then
+if "$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run --input-mode direct >"$dir/out" 2>&1; then
     echo 'explicit X11 unexpectedly worked without an X display' >&2; exit 1
 fi
 grep -q 'requires an accessible X11' "$dir/out"
@@ -102,7 +102,7 @@ if [[ ${LOOMWRIGHT_TEST_HOOKS:-} == 1 ]] && command -v Xvfb >/dev/null; then
     run_script
     sed -i '/loom "native-test" {/a\    option compositor = "wayland"' "$dir/script.loom"
     stage='strict Wayland startup failure'
-    if "$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run >"$dir/out" 2>&1; then
+    if "$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run --input-mode direct >"$dir/out" 2>&1; then
         echo 'explicit Wayland unexpectedly fell back to X11' >&2; exit 1
     fi
     grep -q 'injected Wayland panel startup failure' "$dir/out"
@@ -126,7 +126,7 @@ loom "native-disconnect" {
     }
 }
 EOF
-"$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run >"$dir/out" 2>&1 &
+"$LOOMWRIGHT_BIN" --run "$dir/script.loom" --dry-run --input-mode direct >"$dir/out" 2>&1 &
 app=$!
 for _ in $(seq 1 400); do
     grep -q native-script-started "$dir/out" && break

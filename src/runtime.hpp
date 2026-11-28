@@ -20,6 +20,8 @@
 
 namespace loomwright {
 
+class InputClient;
+
 using VariableMap = std::unordered_map<std::string, Value>;
 
 /// Resolve aliases and upper-case a key name (`ctrl` -> `LEFTCTRL`).
@@ -40,6 +42,7 @@ public:
         std::string output_backend;
         std::string screen_size;
         bool verbose = false;
+        bool shared_input = false;  // CLI opts in; embedded runtimes may use direct input.
     };
 
     explicit Runtime(Script script);
@@ -112,6 +115,7 @@ private:
 
     Task run_body();
     Task read_device(InputDevice* device, std::shared_ptr<PassthroughDevice> passthrough);
+    Task read_broker(std::shared_ptr<InputClient> client);
     Task dispatch(const Node& event, std::string key, std::string edge);
     Task safe_dispatch(const Node& event, std::string key, std::string edge);
     Task execute_nodes(const std::vector<Node>& nodes, const EventContext& context, Value* function_result = nullptr);

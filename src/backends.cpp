@@ -366,7 +366,9 @@ PassthroughDevice::PassthroughDevice(const DeviceCapabilities& capabilities, Vir
     if (!device_) throw BackendError("passthrough device factory returned no device");
 }
 
-PassthroughDevice::~PassthroughDevice() { close(); }
+PassthroughDevice::~PassthroughDevice() {
+    try { close(); } catch (...) {}
+}
 
 void PassthroughDevice::write_event(int type, int code, int value) {
     if (!device_) return;

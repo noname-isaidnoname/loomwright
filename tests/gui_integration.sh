@@ -51,7 +51,9 @@ for number in $(seq 96 199); do
     [[ ! -e /tmp/.X11-unix/X$number ]] || continue
     D=:$number
     if command -v Xvfb >/dev/null; then
-        Xvfb "$D" -screen 0 1024x768x24 > /dev/null 2>&1 & server=$!
+        # Several independent clients run in sequence. Otherwise Xvfb can
+        # reset after the last disconnect while the next client connects.
+        Xvfb "$D" -noreset -screen 0 1024x768x24 > /dev/null 2>&1 & server=$!
     elif command -v Xwayland >/dev/null && [[ -n ${WAYLAND_DISPLAY:-} ]]; then
         Xwayland "$D" -rootless > /dev/null 2>&1 & server=$!
     else
@@ -133,7 +135,7 @@ if command -v setxkbmap >/dev/null && command -v Xvfb >/dev/null; then
     fi
 fi
 
-DISPLAY=$D LOOMWRIGHT_GUI_DEBUG_RECTS="$DIR/rects" stdbuf -oL "$BIN" --run "$SCRIPT" --dry-run >"$DIR/out" 2>"$DIR/err" & app=$!
+DISPLAY=$D LOOMWRIGHT_GUI_DEBUG_RECTS="$DIR/rects" stdbuf -oL "$BIN" --run "$SCRIPT" --dry-run --input-mode direct >"$DIR/out" 2>"$DIR/err" & app=$!
 window=
 for _ in $(seq 1 100); do
     kill -0 "$app" 2>/dev/null || { cat "$DIR/err" >&2; exit 1; }
@@ -199,7 +201,7 @@ loom "external destroy" {
     when gui window closes { log "destroy-close-once" }
 }
 LOOMWRIGHT
-DISPLAY=$D stdbuf -oL "$BIN" --run "$DIR/external.loom" --dry-run >"$DIR/out" 2>"$DIR/err" & app=$!
+DISPLAY=$D stdbuf -oL "$BIN" --run "$DIR/external.loom" --dry-run --input-mode direct >"$DIR/out" 2>"$DIR/err" & app=$!
 window=
 for _ in $(seq 1 100); do
     kill -0 "$app" 2>/dev/null || { cat "$DIR/err" >&2; exit 1; }
@@ -228,7 +230,7 @@ loom "display disconnect" {
     when timer every 5ms { call gui_set_text("status", "updating") }
 }
 LOOMWRIGHT
-DISPLAY=$D stdbuf -oL "$BIN" --run "$DIR/disconnect.loom" --dry-run >"$DIR/out" 2>"$DIR/err" & app=$!
+DISPLAY=$D stdbuf -oL "$BIN" --run "$DIR/disconnect.loom" --dry-run --input-mode direct >"$DIR/out" 2>"$DIR/err" & app=$!
 for _ in $(seq 1 100); do
     kill -0 "$app" 2>/dev/null || { cat "$DIR/err" >&2; exit 1; }
     grep -q 'Running ' "$DIR/out" && break

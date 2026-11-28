@@ -11,6 +11,14 @@ public:
     ~UniqueFd() { if (fd_ >= 0) ::close(fd_); }
     UniqueFd(const UniqueFd&) = delete;
     UniqueFd& operator=(const UniqueFd&) = delete;
+    UniqueFd(UniqueFd&& other) noexcept : fd_(other.release()) {}
+    UniqueFd& operator=(UniqueFd&& other) noexcept {
+        if (this != &other) {
+            if (fd_ >= 0) ::close(fd_);
+            fd_ = other.release();
+        }
+        return *this;
+    }
 
     int get() const { return fd_; }
     int release() {

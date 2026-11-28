@@ -105,6 +105,7 @@ A script path without an extension receives `.loom`.
 loomwright --init <script-name> [--force]
 loomwright --check <script-path>
 loomwright --run <script-path> [--dry-run] [--input-device /dev/input/eventN]
+           [--input-mode auto|direct|broker]
                 [--output-backend auto|ydotool|uinput] [--screen-size WxH]
 loomwright --get-mouse-pos
 loomwright --docs [topic]
@@ -332,7 +333,15 @@ Both output backends need `/dev/uinput` access. Pointer motion, scrolling, and k
 - `output = "auto"` prefers `ydotool` when the client and daemon socket exist; otherwise it uses `uinput` when writable.
 - `ydotool` handles buttons/keys/text. Loomwright still uses its own absolute `uinput` pointer for `cursor warp`/`move`/`scroll` (ydotool 1.0.x absolute motion is unreliable).
 - `uinput` creates an absolute pointer plus keys/buttons/relative axes. `ydotool` is preferred for non-US layouts and Unicode text.
-- `consume key NAME` grabs the physical keyboard and replays non-consumed events through a virtual passthrough device; the panic key is never consumed.
+- `consume key NAME` and `remap key` use `/dev/uinput` to replay the keys they don't consume.
+
+## Running multiple scripts
+
+Run scripts in separate terminals or processes as usual. By default, Loomwright starts a local input broker on demand. Scripts sharing the broker can listen to the same keyboard and consume or remap different keys without blocking one another. All subscribed scripts see the physical key edges, including consumed keys; the desktop receives each unconsumed event once. A panic key configured by any live, non-dry-run client passes through to the desktop. `--dry-run` still sees physical input but does not change what the broker consumes.
+
+The broker is shared by invocations of the same user with the same `$XDG_RUNTIME_DIR` (or by that user when it is unset). It exits automatically when no scripts need it and any captured keys have been released. Release held keys before starting the first consuming script. Use `--input-mode direct` only for standalone runs; a direct-mode script or another remapper cannot share an exclusive grab on the same keyboard. `--doctor` reports whether the broker is running.
+
+Input sharing does not coordinate output actions. If two scripts synthesize the same held key or button, prefer `--output-backend uinput` for separate virtual devices; `ydotoold` uses a shared virtual device.
 
 ## Contributing
 

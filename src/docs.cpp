@@ -352,9 +352,12 @@ Safety and runtime behavior
 * The panic key defaults to PAUSE. Ctrl+C also stops the runtime.
 * `consume key NAME` is a script-wide declaration, not a per-event action: it
   applies from startup no matter where it appears, so the first key-down can be
-  swallowed. Loomwright grabs the physical keyboard and replays every other event
-  through a virtual uinput device; this needs `/dev/uinput` write access and the
-  same device permissions as reading. The panic key is never consumed.
+  swallowed. By default a shared input broker grabs the physical keyboard and
+  replays unconsumed events once through a virtual uinput device. This needs
+  `/dev/uinput` write access and the same device permissions as reading.
+  Multiple scripts can consume different keys on one keyboard. All subscribed
+  scripts still see physical key edges, and a live, non-dry-run script's panic
+  key stays visible to the desktop.
 * The runtime releases all held virtual buttons/keys on stop and on errors.
 * Named mouse hold tokens are reference-counted. Use a different token for
   each independent physical key if several bindings can hold the same button.
@@ -381,7 +384,11 @@ Safety and runtime behavior
 * Panels use native Wayland in a Wayland session when built with GTK3 and
   wayland-client; otherwise auto uses X11/Xwayland. Explicit "wayland" and
   "x11" require their respective displays. The standalone picker still uses X11.
-* `--dry-run` logs actions instead of injecting them, but still listens for keys.
+* `--dry-run` logs actions and sees physical keys without changing what the
+  input broker suppresses.
+* `--input-mode direct` bypasses the broker for standalone runs. Do not mix it
+  with consuming scripts on the same keyboard. `auto` and `broker` use shared
+  input. The broker does not coordinate synthetic output between scripts.
 * `--get-mouse-pos` captures the desktop with spectacle, grim,
   gnome-screenshot, scrot, or ImageMagick import, then shows that still image
   full-screen in an XWayland overlay with a live coordinate tooltip. Left-click
@@ -395,14 +402,15 @@ Linux backends
 --------------
 
 Input reads physical devices from /dev/input/event* with evdev ioctls. Keyboards
-are opened when the script binds a key; mice are opened when it binds a mouse
-button. This works under Xorg, Xwayland, and Wayland because it is below the
+are watched for bindings, the panic key, and key_down(); mice are opened for a
+mouse binding. This works under Xorg, Xwayland, and Wayland because it is below the
 compositor; the user needs permission to read the intended input devices.
 Prefer a udev rule or an `input` group membership over running the program as
 root. Mouse buttons are observed without an EVIOCGRAB, unlike `consume key`,
 which grabs keyboards to withhold a key.
-Release all keys and buttons before starting a consuming or remapping script,
-and avoid typing during startup. Loomwright refuses a grab when it detects a held
+Release all keys and buttons before a new grab is needed (for example, the first
+consuming or remapping script), and avoid typing during that handoff.
+Loomwright refuses a grab when it detects a held
 input before grabbing or queued input during the handoff. A press just before
 the grab can still have its release intercepted; if a key appears stuck after
 a failed grab, physically tap and release it. The error identifies observed
@@ -469,7 +477,7 @@ const std::vector<std::pair<std::string, std::vector<std::string>>>& reference()
           "gui_alert(MESSAGE [, TITLE])", "gui_input(PROMPT [, DEFAULT [, TITLE]])",
           "gui_confirm(QUESTION [, TITLE])", "suspend_hotkeys(BOOL)", "hotkeys_suspended()",
           "set_hotkey_enabled(NAME, BOOL)", "hotkey_enabled(NAME)"}},
-        {"input", {"consume key NAME (release held inputs before startup)"}},
+        {"input", {"consume key NAME (shared by default; release held inputs before a new grab)"}},
         {"options", {"option compositor = \"auto\" | \"x11\" | \"wayland\" (panel backend)"}},
         {"desktop",
          {"scroll X, Y", "clip write EXPR", "clip read into VARIABLE", "notify EXPR",

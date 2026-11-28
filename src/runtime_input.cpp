@@ -6,6 +6,7 @@
 #include <linux/input.h>
 
 #include "errors.hpp"
+#include "input_broker.hpp"
 #include "keys.hpp"
 #include "runtime_internal.hpp"
 
@@ -116,6 +117,29 @@ Task Runtime::read_device(InputDevice* device, std::shared_ptr<PassthroughDevice
             events.push_back(RawEvent{raw[index].type, raw[index].code, raw[index].value});
         }
         process_events(events, passthrough.get(), path, [device] { return device->pressed_key_codes(); });
+    }
+}
+
+Task Runtime::read_broker(std::shared_ptr<InputClient> client) {
+    try {
+        while (!scheduler_.stop_requested()) {
+            co_await readable(client->fd());
+            for (int i = 0; i < 32 && !scheduler_.stop_requested(); ++i) {
+                auto event = client->receive();
+                if (!event) break;
+                if (event->disconnected) {
+                    say("Input device " + event->path + " disconnected");
+                    disconnect_device(event->path);
+                } else {
+                    process_events(event->edges, nullptr, event->path);
+                }
+            }
+        }
+    } catch (const TaskCancelled&) {
+        throw;
+    } catch (const std::exception& error) {
+        runtime_error_ = error.what();
+        scheduler_.request_stop();
     }
 }
 

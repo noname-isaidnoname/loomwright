@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(loomwright
-    VERSION 0.7.4
+    VERSION 0.8.0
     DESCRIPTION "A Linux-first desktop automation language and runtime"
     LANGUAGES C CXX)
 
@@ -219,6 +219,8 @@ add_library(loomwright_core STATIC
     src/backends.cpp
     src/scheduler.cpp
     src/input.cpp
+    src/input_broker.cpp
+    src/input_client.cpp
     src/runtime.cpp
     src/runtime_input.cpp
     src/runtime_output.cpp
@@ -283,7 +285,12 @@ if(BUILD_TESTING)
     add_executable(evdev_handoff tests/evdev_handoff.cpp)
     target_link_libraries(evdev_handoff PRIVATE loomwright_core loomwright_test_options)
     add_test(NAME evdev_handoff COMMAND evdev_handoff)
+    add_test(NAME evdev_shared_broker COMMAND evdev_handoff --shared-broker)
     set_tests_properties(evdev_handoff PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 15)
+    set_tests_properties(evdev_shared_broker PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20)
+    add_test(NAME shared_input_cli
+        COMMAND bash ${CMAKE_SOURCE_DIR}/tests/shared_input_cli.sh $<TARGET_FILE:loomwright>)
+    set_tests_properties(shared_input_cli PROPERTIES TIMEOUT 20)
 
     # The picker needs a real X server; the shell test starts a private one and
     # skips (77) when none is available.

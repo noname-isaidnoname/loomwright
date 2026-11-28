@@ -30,6 +30,7 @@ automation process before its output cleanup.
 | `src/backends.cpp`, `src/backends.hpp` | `OutputBackend` interface, ydotoold, uinput, dry run, backend selection |
 | `src/uinput.cpp`, `src/uinput.hpp` | `UInputDevice`: creates the virtual device, batched `input_event` writes |
 | `src/input.cpp`, `src/input.hpp` | `InputDevice`: open/list `/dev/input/event*`, evdev caps, grab/ungrab, passthrough replay |
+| `src/input_broker.cpp`, `src/input_client.cpp` | Local broker election, per-device capture and fan-out; client registration and edge delivery |
 | `src/subprocess.cpp`, `src/subprocess.hpp` | `run_command`/`spawn_detached`, `which`, `split_shell_words`, `ydotool_socket_path` |
 | `src/keys.cpp`, `src/keys.inc` | key-name tables, `validate_key_name`, `canonical_key_name`, `find_mouse_button` |
 | `src/value.cpp`, `src/value.hpp` | `Value` (int/double/bool/string), `repr`/`str` formatting, truthiness |
@@ -137,13 +138,23 @@ dependents before prerequisites and falls back to reverse spawn order.
 
 ### Input (`src/runtime_input.cpp`, `src/input.cpp`)
 
-`Runtime::open_input_devices()` lists `/dev/input/event*`, opens the readable
-ones, and filters out injected devices by name (`loomwright`, `ydotool`,
-`virtual pointer`, `remap_clicks`). Keyboards are always kept; mice are kept
-only when the script binds a mouse button. Consumed keys are grabbed with
-`EVIOCGRAB`; non-consumed events are replayed through a `PassthroughDevice`.
-`process_events` decodes `RawEvent`s, tracks per-device and global key state,
-handles remaps, and synthesises releases on disconnect.
+The CLI defaults to a detached input broker. A same-UID Unix `SOCK_SEQPACKET`
+connection registers device selection, consumed key codes, and a panic-key
+exemption. The broker's poll loop owns each evdev device once (deduplicated by
+device number), filters out virtual output, and watches mouse devices only
+when requested. A keyboard with a consumption claim can have one `EVIOCGRAB`
+and one passthrough device. The replay policy is the union of claims from
+subscribers for that device minus the broker-wide panic exemptions. Both
+consuming clients and observers get the physical key edges, regardless of
+what the desktop sees.
+
+`Runtime` seeds its input state from the registration snapshot and consumes
+broker events through the existing scheduler. `process_events` tracks
+per-device and global key state, and the runtime owns bindings, remaps,
+timers, output, and GUI. Device removal synthesizes releases. Socket loss
+stops the runtime through its existing output cleanup. `--input-mode direct`
+keeps device reads and passthrough in `Runtime::open_input_devices()` /
+`Runtime::read_device()` without broker coordination.
 
 ### Output (`src/runtime_output.cpp`, `src/backends.cpp`)
 

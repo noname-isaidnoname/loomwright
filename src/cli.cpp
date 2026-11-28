@@ -16,6 +16,7 @@
 #include "docs.hpp"
 #include "errors.hpp"
 #include "input.hpp"
+#include "input_broker.hpp"
 #include "mousepos.hpp"
 #include "parser.hpp"
 #include "runtime.hpp"
@@ -157,6 +158,7 @@ int command_run(const std::filesystem::path& path, const CliArgs& args) {
     Runtime::Options options;
     options.dry_run = args.dry_run;
     options.verbose = args.verbose;
+    options.shared_input = args.input_mode != "direct";
     if (args.input_device) options.input_device = *args.input_device;
     if (args.output_backend) options.output_backend = *args.output_backend;
     if (args.screen_size) options.screen_size = *args.screen_size;
@@ -216,6 +218,7 @@ int command_doctor() {
         if (InputDevice::open(path)) ++accessible;
     }
     std::cout << "evdev input: " << accessible << " accessible event device(s)\n";
+    std::cout << "Shared input broker: " << (input_broker_running() ? "running" : "not running (starts on demand)") << "\n";
 
     const std::string ydotool = which("ydotool");
     const std::string ydotoold = which("ydotoold");
@@ -287,6 +290,7 @@ std::string usage_text() {
     return "usage: loomwright [-h] [--init SCRIPT | --check PATH | --run PATH | --docs [TOPIC] | --devices |\n"
            "               --screen | --get-mouse-pos | --list-api | --doctor]\n"
            "               [--force] [--dry-run] [--input-device EVENT_PATH]\n"
+           "               [--input-mode {auto,direct,broker}]\n"
            "               [--output-backend {auto,ydotool,uinput}] [--screen-size WIDTHxHEIGHT] [--verbose]\n"
            "               [--version] [script]\n";
 }
@@ -313,6 +317,8 @@ std::string help_text() {
            "  --dry-run             log output actions instead of injecting them\n"
            "  --input-device EVENT_PATH\n"
            "                        listen to one /dev/input/eventN keyboard\n"
+           "  --input-mode {auto,direct,broker}\n"
+           "                        share input by default; direct mode is for standalone runs\n"
            "  --output-backend {auto,ydotool,uinput}\n"
            "                        override the script's output backend\n"
            "  --screen-size WIDTHxHEIGHT\n"
@@ -398,6 +404,13 @@ CliArgs parse_cli(const std::vector<std::string>& args) {
             parsed.verbose = true;
         } else if (token == "--input-device") {
             parsed.input_device = take_value(token);
+        } else if (token == "--input-mode") {
+            const std::string value = take_value(token);
+            if (value != "auto" && value != "direct" && value != "broker") {
+                throw CliUsageError("argument --input-mode: invalid choice: " + quote_string(value) +
+                                    " (choose from 'auto', 'direct', 'broker')");
+            }
+            parsed.input_mode = value;
         } else if (token == "--output-backend") {
             const std::string value = take_value(token);
             if (value != "auto" && value != "ydotool" && value != "uinput") {

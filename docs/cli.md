@@ -9,13 +9,14 @@ exit codes. `src/main.cpp` is a thin wrapper around `run_cli()`.
 loomwright [-h] [--init SCRIPT | --check PATH | --run PATH | --docs [TOPIC] | --devices |
                --screen | --get-mouse-pos | --list-api | --doctor]
                [--force] [--dry-run] [--input-device EVENT_PATH]
+               [--input-mode {auto,direct,broker}]
                [--output-backend {auto,ydotool,uinput}] [--screen-size WIDTHxHEIGHT] [--verbose]
                [--version] [script]
 ```
 
 A positional `script` is shorthand for `--run PATH`. Only one mode flag is
 allowed per invocation; `--force`, `--dry-run`, `--verbose`,
-`--input-device`, `--output-backend` and `--screen-size` modify the mode.
+`--input-device`, `--input-mode`, `--output-backend` and `--screen-size` modify the mode.
 `--docs` takes an optional topic and treats the next non-flag token as the
 topic.
 
@@ -50,9 +51,13 @@ success.
 Parses, checks, and refuses to run when the checker reports errors. Otherwise
 it builds a `Runtime`, spawns `runtime.run()` onto the scheduler, and drives the
 loop. After the loop it rethrows `runtime.failure()` if one was recorded.
-`--dry-run` logs output actions instead of injecting them, but still listens
-for physical keys. `--input-device`, `--output-backend`, `--screen-size` and
-`--verbose` override the script/CLI options.
+`--dry-run` logs output actions instead of injecting them and observes physical
+keys without requesting suppression. `--input-device`, `--output-backend`,
+`--screen-size` and `--verbose` override the script/CLI options. `--input-mode
+auto` (the default) and `--input-mode broker` both use shared input; they do not
+silently fall back to a direct reader on broker errors. `--input-mode direct`
+opts out for standalone use. A direct reader does not receive input from a
+device grabbed by another process, including the broker.
 
 ### `--docs [TOPIC]`, `--list-api`
 
@@ -64,8 +69,8 @@ prints the `api_reference()` groups.
 `--devices` opens each `/dev/input/event*` it can read and prints its name and
 kind (keyboard/mouse/other). `--screen` prints the detected desktop bounds.
 `--doctor` prints the detected session type, desktop bounds, accessible evdev
-devices, ydotool/ydotoold, `/dev/uinput`, X11, screenshot tools and clipboard
-tools.
+devices, broker status, ydotool/ydotoold, `/dev/uinput`, X11, screenshot tools
+and clipboard tools. It does not start the broker.
 
 ## Mouse-position picker
 

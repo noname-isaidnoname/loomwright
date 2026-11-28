@@ -104,11 +104,21 @@ device open for the whole run (created once, not per action).
 ### Key consumption grabs and replays
 
 Key consumption grabs the physical device with `EVIOCGRAB` (`src/input.cpp`)
-and replays non-consumed events through a passthrough uinput device. The
+and replays non-consumed events through a passthrough uinput device. A grab is
+exclusive even for observers. In shared mode the broker therefore owns the
+physical read and fans out original key edges; runtimes must not observe
+the replay device. The
 passthrough mirrors `EV_KEY`, `EV_REL`, `EV_ABS`, and `EV_MSC` but
 deliberately not `EV_REP`, otherwise held keys would repeat twice. `consume`
 declarations are collected before devices are grabbed so the first key-down is
 swallowed, and the panic key is removed from the consumed set.
+
+The broker decides whether to replay on key-down and sticks with that
+decision for repeat and key-up, even if a client joins/leaves or changes the
+combined panic exemption. It stops an affected client rather than dropping
+edges when the socket queue is full. It defers a normal ungrab until tracked
+keys and buttons are up and the frame is complete; as at initial capture,
+Linux does not offer an atomic idle check with the handoff ioctl.
 
 ### Grab only an idle device
 

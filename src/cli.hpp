@@ -21,6 +21,7 @@ struct CliArgs {
     std::optional<std::string> docs;
     std::optional<std::string> script;
     std::optional<std::string> input_device;
+    std::optional<std::string> input_mode;
     std::optional<std::string> output_backend;
     std::optional<std::string> screen_size;
 

@@ -8,6 +8,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <linux/input.h>
@@ -19,6 +20,7 @@
 
 #include "builtins.hpp"
 #include "errors.hpp"
+#include "input_broker.hpp"
 #include "keys.hpp"
 #include "runtime_internal.hpp"
 #include "screen_geometry.hpp"
@@ -851,6 +853,7 @@ Task Runtime::run_body() {
     std::exception_ptr failure;
     std::vector<std::shared_ptr<PassthroughDevice>> passthroughs;
     std::shared_ptr<SignalScope> signals;
+    std::shared_ptr<InputClient> input_client;
     try {
         if (::access("/proc", F_OK) != 0) {
             throw RuntimeErrorLoomwright("Loomwright's live runtime is Linux-only.");
@@ -872,6 +875,31 @@ Task Runtime::run_body() {
         panic_key_ = lower_ascii(panic_text) == "none" ? std::string() : canonical_key(panic_text);
         consumed_keys_ = collect_consumed_keys();
 
+        bool has_key_events = !script_.remaps.empty() || !consumed_keys_.empty();
+        bool has_mouse_events = false;
+        for (const auto& event : script_.events) {
+            if (event.event_kind == "key") has_key_events = true;
+            if (event.event_kind == "mouse") has_mouse_events = true;
+        }
+        if (options_.shared_input) {
+            BrokerRequest request;
+            if (!options_.input_device.empty())
+                request.device = std::filesystem::absolute(options_.input_device).string();
+            request.mice = has_mouse_events;
+            request.require_keyboard = has_key_events;
+            // Match direct-mode normalization, including key aliases.
+            for (int code = 0; code <= KEY_MAX; ++code) {
+                const auto name = normalize_key_event(code);
+                if (!name) continue;
+                const auto key = canonical_key(*name);
+                if (!options_.dry_run && key == panic_key_) request.panic.insert(code);
+                if (!options_.dry_run && consumed_keys_.contains(key)) request.consume.insert(code);
+            }
+            if (options_.dry_run && !consumed_keys_.empty())
+                say("Dry run: would consume key(s) " + join_sorted(consumed_keys_) + "; no grab requested.");
+            input_client = std::make_shared<InputClient>(request);
+        }
+
         for (const auto& panel : script_.panels) {
             std::unique_ptr<GuiHost> host;
             try {
@@ -892,11 +920,7 @@ Task Runtime::run_body() {
         }
         for (auto& host : gui_hosts_) spawn_background(gui_loop(host.get()));
 
-        bool has_key_events = !script_.remaps.empty() || !consumed_keys_.empty();
-        bool has_mouse_events = false;
         for (const auto& event : script_.events) {
-            if (event.event_kind == "key") has_key_events = true;
-            if (event.event_kind == "mouse") has_mouse_events = true;
             if (event.event_kind == "app") {
                 co_await safe_dispatch(event, std::string(), "starts");
             } else if (event.event_kind == "timer") {
@@ -907,14 +931,26 @@ Task Runtime::run_body() {
             say("No key bindings found; timer/app events are active. Press the panic key or Ctrl+C to stop.");
         }
 
-        devices_ = open_input_devices(has_mouse_events);
+        if (input_client && !scheduler_.stop_requested()) {
+            std::string names;
+            for (const auto& device : input_client->devices()) {
+                seed_device_keys(device.path, device.down);
+                if (!names.empty()) names += ", ";
+                names += std::string(device.mouse ? "mouse " : "keyboard ") + device.name + " (" + device.path + ")";
+            }
+            spawn_background(read_broker(input_client));
+            if (!names.empty()) say("Listening through input broker: " + names);
+        }
+        if (!options_.shared_input) devices_ = open_input_devices(has_mouse_events);
         const auto has_device = [this](const auto& predicate) {
             return std::any_of(devices_.begin(), devices_.end(), predicate);
         };
-        if (has_key_events && !has_device([](const auto& device) static { return device->is_keyboard(); })) {
+        if (!options_.shared_input && has_key_events &&
+            !has_device([](const auto& device) static { return device->is_keyboard(); })) {
             throw RuntimeErrorLoomwright(input_permission_help());
         }
-        if (has_mouse_events && !has_device([](const auto& device) static { return device->is_mouse(); })) {
+        if (!options_.shared_input && has_mouse_events &&
+            !has_device([](const auto& device) static { return device->is_mouse(); })) {
             throw RuntimeErrorLoomwright(mouse_permission_help());
         }
 
@@ -996,6 +1032,7 @@ Task Runtime::run_body() {
     };
     release_all_holds();
     if (backend_) cleanup([this] { backend_->close(); });
+    input_client.reset();
     for (auto& passthrough : passthroughs) cleanup([&passthrough] { passthrough->close(); });
     passthroughs.clear();
     for (auto& device : devices_) cleanup([&device] { device->close(); });
