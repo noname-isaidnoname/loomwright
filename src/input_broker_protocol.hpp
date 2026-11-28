@@ -14,8 +14,20 @@ namespace loomwright::broker {
 
 // Private same-machine protocol. Integers are fixed-width in host byte order;
 // SOCK_SEQPACKET supplies record boundaries. Never send native C++ structs.
-enum class Message : int32_t { Register = 1, Device, Ready, Edges, Removed, Error, Probe };
-constexpr int32_t kProtocol = 1;
+enum class Message : int32_t {
+    Register = 1,
+    Device,
+    Ready,
+    Edges,
+    Removed,
+    Error,
+    Probe,
+    OutputClaim,
+    OutputState,
+};
+// Version 2 adds shared output claims and held-state snapshots. An older
+// broker cannot coordinate output, so clients refuse to talk to it.
+constexpr int32_t kProtocol = 2;
 constexpr size_t kMaxPacket = 16384;
 constexpr size_t kMaxDevices = 256;
 using Clock = std::chrono::steady_clock;
@@ -80,5 +92,6 @@ bool send(int fd, const Packet& packet);
 // Returns nullopt on EAGAIN; an empty packet means EOF.
 std::optional<Packet> receive(int fd);
 std::vector<int> read_codes(Packet& packet);
+OutputKind read_output_kind(Packet& packet);
 
 }  // namespace loomwright::broker

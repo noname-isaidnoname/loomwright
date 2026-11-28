@@ -853,7 +853,6 @@ Task Runtime::run_body() {
     std::exception_ptr failure;
     std::vector<std::shared_ptr<PassthroughDevice>> passthroughs;
     std::shared_ptr<SignalScope> signals;
-    std::shared_ptr<InputClient> input_client;
     try {
         if (::access("/proc", F_OK) != 0) {
             throw RuntimeErrorLoomwright("Loomwright's live runtime is Linux-only.");
@@ -897,7 +896,7 @@ Task Runtime::run_body() {
             }
             if (options_.dry_run && !consumed_keys_.empty())
                 say("Dry run: would consume key(s) " + join_sorted(consumed_keys_) + "; no grab requested.");
-            input_client = std::make_shared<InputClient>(request);
+            input_client_ = std::make_shared<InputClient>(request);
         }
 
         for (const auto& panel : script_.panels) {
@@ -931,14 +930,14 @@ Task Runtime::run_body() {
             say("No key bindings found; timer/app events are active. Press the panic key or Ctrl+C to stop.");
         }
 
-        if (input_client && !scheduler_.stop_requested()) {
+        if (input_client_ && !scheduler_.stop_requested()) {
             std::string names;
-            for (const auto& device : input_client->devices()) {
+            for (const auto& device : input_client_->devices()) {
                 seed_device_keys(device.path, device.down);
                 if (!names.empty()) names += ", ";
                 names += std::string(device.mouse ? "mouse " : "keyboard ") + device.name + " (" + device.path + ")";
             }
-            spawn_background(read_broker(input_client));
+            spawn_background(read_broker(input_client_));
             if (!names.empty()) say("Listening through input broker: " + names);
         }
         if (!options_.shared_input) devices_ = open_input_devices(has_mouse_events);
@@ -1032,7 +1031,7 @@ Task Runtime::run_body() {
     };
     release_all_holds();
     if (backend_) cleanup([this] { backend_->close(); });
-    input_client.reset();
+    input_client_.reset();
     for (auto& passthrough : passthroughs) cleanup([&passthrough] { passthrough->close(); });
     passthroughs.clear();
     for (auto& device : devices_) cleanup([&device] { device->close(); });
@@ -1836,8 +1835,12 @@ Value Runtime::call_builtin(Builtin builtin, const std::string& name, std::vecto
     }
     case Builtin::MouseHeld: {
         require(1);
-        const auto found = button_refs_.find(lower_ascii(args[0].to_string()));
-        return Value::of_bool(found != button_refs_.end() && found->second > 0);
+        const auto button = lower_ascii(args[0].to_string());
+        const auto found = button_refs_.find(button);
+        if (found != button_refs_.end() && found->second > 0) return Value::of_bool(true);
+        // A button held by another script through the broker is held for the
+        // whole session, so every client sees the same answer.
+        return Value::of_bool(input_client_ && input_client_->output_held(OutputKind::Button, button));
     }
     case Builtin::SuspendHotkeys: {
         require(1);
@@ -2365,6 +2368,16 @@ Value Runtime::eval_pure(const Expr& expr, const EventContext& context) {
     return Value::none();
 }
 
+void Runtime::inject_key(const std::string& name, bool down) {
+    if (input_client_ && !options_.dry_run) input_client_->claim_output(OutputKind::Key, name, down);
+    else backend_->key(name, down);
+}
+
+void Runtime::inject_button(const std::string& button, bool down) {
+    if (input_client_ && !options_.dry_run) input_client_->claim_output(OutputKind::Button, button, down);
+    else backend_->button(button, down);
+}
+
 void Runtime::hold_button(const std::string& owner, const std::string& button) {
     const auto existing = held_tokens_.find(owner);
     if (existing != held_tokens_.end()) {
@@ -2376,7 +2389,7 @@ void Runtime::hold_button(const std::string& owner, const std::string& button) {
     }
     const auto reference = button_refs_.find(button);
     const int count = reference != button_refs_.end() ? reference->second : 0;
-    if (count == 0) backend_->button(button, true);
+    if (count == 0) inject_button(button, true);
     held_tokens_[owner] = button;
     button_refs_[button] = count + 1;
 }
@@ -2389,7 +2402,7 @@ void Runtime::free_button(const std::string& owner) {
     const auto reference = button_refs_.find(button);
     const int count = (reference != button_refs_.end() ? reference->second : 1) - 1;
     if (count <= 0) {
-        backend_->button(button, false);
+        inject_button(button, false);
         button_refs_.erase(button);
     } else {
         button_refs_[button] = count;
@@ -2400,7 +2413,7 @@ void Runtime::free_button(const std::string& owner) {
 void Runtime::hold_key(const std::string& name) {
     const auto found = key_refs_.find(name);
     const int count = found != key_refs_.end() ? found->second : 0;
-    if (count == 0) backend_->key(name, true);
+    if (count == 0) inject_key(name, true);
     key_refs_[name] = count + 1;
 }
 
@@ -2409,7 +2422,7 @@ void Runtime::free_key(const std::string& name) {
     const int count = (found != key_refs_.end() ? found->second : 0) - 1;
     if (count <= 0) {
         if (found != key_refs_.end()) {
-            backend_->key(name, false);
+            inject_key(name, false);
             key_refs_.erase(found);
         }
     } else {
@@ -2423,13 +2436,13 @@ void Runtime::release_all_holds() {
     for (const auto& entry : held_tokens_) buttons.insert(entry.second);
     for (const auto& button : buttons) {
         try {
-            backend_->button(button, false);
+            inject_button(button, false);
         } catch (const std::exception&) {
         }
     }
     for (const auto& entry : key_refs_) {
         try {
-            backend_->key(entry.first, false);
+            inject_key(entry.first, false);
         } catch (const std::exception&) {
         }
     }

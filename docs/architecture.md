@@ -30,7 +30,7 @@ automation process before its output cleanup.
 | `src/backends.cpp`, `src/backends.hpp` | `OutputBackend` interface, ydotoold, uinput, dry run, backend selection |
 | `src/uinput.cpp`, `src/uinput.hpp` | `UInputDevice`: creates the virtual device, batched `input_event` writes |
 | `src/input.cpp`, `src/input.hpp` | `InputDevice`: open/list `/dev/input/event*`, evdev caps, grab/ungrab, passthrough replay |
-| `src/input_broker.cpp`, `src/input_client.cpp` | Local broker election, per-device capture and fan-out; client registration and edge delivery |
+| `src/input_broker.cpp`, `src/input_client.cpp` | Local broker election, per-device capture and fan-out; client registration and edge delivery; shared synthetic key/button claims and held-state snapshots |
 | `src/subprocess.cpp`, `src/subprocess.hpp` | `run_command`/`spawn_detached`, `which`, `split_shell_words`, `ydotool_socket_path` |
 | `src/keys.cpp`, `src/keys.inc` | key-name tables, `validate_key_name`, `canonical_key_name`, `find_mouse_button` |
 | `src/value.cpp`, `src/value.hpp` | `Value` (int/double/bool/string), `repr`/`str` formatting, truthiness |
@@ -156,6 +156,16 @@ stops the runtime through its existing output cleanup. `--input-mode direct`
 keeps device reads and passthrough in `Runtime::open_input_devices()` /
 `Runtime::read_device()` without broker coordination.
 
+The same connection also carries synthetic key and button claims. `OutputArbiter`
+(`src/input_broker.cpp`) counts owners per `(kind, name)`, injects a down on the
+first claim and an up on the last release, and releases a departing client's
+claims before its fd can be reused. The broker owns the single backend used for
+these injections; snapshots and changes are sent as `OutputState` packets, so a
+script joining mid-hold starts with the same held state as the others.
+`hold_key`/`hold_button` and their release paths in `Runtime` route through the
+claim client in shared, non-dry-run mode and use the local backend otherwise.
+Pointer motion, scrolling and `type_text` remain per-script.
+
 ### Output (`src/runtime_output.cpp`, `src/backends.cpp`)
 
 `OutputBackend` is the interface: `warp`, `move`, `button`, `key`, `type_text`,
@@ -167,7 +177,8 @@ keeps device reads and passthrough in `Runtime::open_input_devices()` /
   keys, buttons and US-layout text.
 - `DryRunBackend` — logs actions without injecting them.
 
-`choose_backend()` implements `output = "auto"` selection. See
+`choose_backend()` implements `output = "auto"` selection, including the
+single backend the broker uses for shared key/button injection. See
 [implementation-traps.md](implementation-traps.md#backends) before changing any
 of this.
 

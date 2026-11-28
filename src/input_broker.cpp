@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <system_error>
 #include <unistd.h>
+#include <utility>
 
 #include "backends.hpp"
 #include "input.hpp"
@@ -31,6 +32,77 @@ bool InputSuppression::filter(const RawEvent& event) {
     if (event.value == 1 && consume_.contains(event.code)) swallowed_.insert(event.code);
     if (event.value == 0) return swallowed_.erase(event.code) != 0;
     return swallowed_.contains(event.code);
+}
+
+OutputArbiter::OutputArbiter(OutputBackend& backend) : backend_(backend) {}
+
+void OutputArbiter::inject(OutputKind kind, const std::string& name, bool down) {
+    if (kind == OutputKind::Button) backend_.button(name, down);
+    else backend_.key(name, down);
+}
+
+bool OutputArbiter::acquire(int owner, OutputKind kind, const std::string& name) {
+    auto& members = owners_[{kind, name}];
+    const bool first = members.empty();
+    members.insert(owner);
+    if (first) inject(kind, name, true);
+    return first;
+}
+
+bool OutputArbiter::release(int owner, OutputKind kind, const std::string& name) {
+    const auto found = owners_.find({kind, name});
+    if (found == owners_.end() || found->second.erase(owner) == 0) return false;
+    if (!found->second.empty()) return false;
+    owners_.erase(found);
+    inject(kind, name, false);
+    return true;
+}
+
+std::vector<OutputState> OutputArbiter::drop(int owner) {
+    std::vector<OutputState> changes;
+    for (auto it = owners_.begin(); it != owners_.end();) {
+        if (it->second.erase(owner) == 0) {
+            ++it;
+            continue;
+        }
+        const OutputState state{it->first.first, it->first.second, static_cast<int>(it->second.size())};
+        if (it->second.empty()) {
+            it = owners_.erase(it);
+            // One broken release must not hide the other claims of a client
+            // that is already leaving.
+            try { inject(state.kind, state.name, false); } catch (...) {}
+        } else {
+            ++it;
+        }
+        changes.push_back(state);
+    }
+    return changes;
+}
+
+void OutputArbiter::clear() {
+    while (!owners_.empty()) {
+        const auto it = owners_.begin();
+        const auto kind = it->first.first;
+        const auto name = it->first.second;
+        owners_.erase(it);
+        try { inject(kind, name, false); } catch (...) {}
+    }
+}
+
+std::vector<OutputState> OutputArbiter::held() const {
+    std::vector<OutputState> result;
+    for (const auto& [claim, members] : owners_)
+        result.push_back({claim.first, claim.second, static_cast<int>(members.size())});
+    return result;
+}
+
+int OutputArbiter::owners(OutputKind kind, const std::string& name) const {
+    const auto found = owners_.find({kind, name});
+    return found == owners_.end() ? 0 : static_cast<int>(found->second.size());
+}
+
+bool OutputArbiter::is_held(OutputKind kind, const std::string& name) const {
+    return owners(kind, name) > 0;
 }
 
 namespace {
@@ -70,29 +142,30 @@ struct Device {
     }
 };
 
-void fail_client(Client& client, const std::string& detail) {
-    Packet reply(Message::Error);
-    reply.text(detail.substr(0, kMaxPacket - 8));
-    (void)broker::send(client.fd.get(), reply);
-    client.dead = true;
-}
-
 class Server {
 public:
-    explicit Server(const BrokerKeyboard& is_keyboard) : is_keyboard_(is_keyboard) {}
+    Server(const BrokerKeyboard& is_keyboard, BrokerOutputFactory output)
+        : is_keyboard_(is_keyboard), output_factory_(std::move(output)) {}
     int run();
 
 private:
     void accept_client(int listener);
     void request(Client& client);
     void register_client(Client& client, Packet& packet);
+    void fail_client(Client& client, const std::string& detail);
     void maintain();
     bool read_device(dev_t id, Device& device);
     void broadcast(dev_t id, const Packet& packet);
+    void broadcast_output_state(const OutputState& state);
+    void disconnect_client(Client& client);
+    OutputArbiter& ensure_output();
     void remove_device(dev_t id, const std::string& error = {});
     void activate(Device& device);
 
     const BrokerKeyboard& is_keyboard_;
+    BrokerOutputFactory output_factory_;
+    std::unique_ptr<OutputBackend> output_backend_;
+    std::unique_ptr<OutputArbiter> output_;
     std::map<int, Client> clients_;
     std::map<dev_t, Device> devices_;
 };
@@ -151,6 +224,12 @@ int Server::run() {
     struct Cleanup {
         Server& server;
         ~Cleanup() {
+            // Release shared synthetic holds before the backend and sockets
+            // disappear; a key held by a dead broker would stay stuck.
+            if (server.output_) {
+                server.output_->clear();
+                try { server.output_backend_->close(); } catch (...) {}
+            }
             server.devices_.clear();
             server.clients_.clear();
         }
@@ -188,9 +267,9 @@ int Server::run() {
         for (i = client_start; i < ready.size(); ++i) {
             auto& client = clients_.at(ready[i].fd);
             if (client.dead) continue;
-            if (ready[i].revents & (POLLHUP | POLLERR | POLLNVAL)) client.dead = true;
+            if (ready[i].revents & (POLLHUP | POLLERR | POLLNVAL)) disconnect_client(client);
             else if (ready[i].revents & POLLIN) request(client);
-            else if (!client.registered && Clock::now() >= client.deadline) client.dead = true;
+            else if (!client.registered && Clock::now() >= client.deadline) disconnect_client(client);
             // A subsequent registration must not include already-dead claims.
             if (client.dead) maintain();
         }
@@ -209,18 +288,68 @@ void Server::accept_client(int listener) {
     clients_.try_emplace(key, Client{std::move(fd), Clock::now() + 10s, false, false, {}, {}, {}});
 }
 
+void Server::fail_client(Client& client, const std::string& detail) {
+    Packet reply(Message::Error);
+    reply.text(detail.substr(0, kMaxPacket - 8));
+    (void)broker::send(client.fd.get(), reply);
+    disconnect_client(client);
+}
+
+void Server::disconnect_client(Client& client) {
+    if (client.dead) return;
+    client.dead = true;
+    if (!output_) return;
+    for (const auto& state : output_->drop(client.fd.get())) broadcast_output_state(state);
+}
+
+OutputArbiter& Server::ensure_output() {
+    if (!output_) {
+        auto backend = output_factory_ ? output_factory_() : choose_backend("auto", 1920, 1080);
+        if (!backend) throw RuntimeErrorLoomwright("No output backend is available for shared output");
+        output_backend_ = std::move(backend);
+        output_ = std::make_unique<OutputArbiter>(*output_backend_);
+    }
+    return *output_;
+}
+
+void Server::broadcast_output_state(const OutputState& state) {
+    Packet packet(Message::OutputState);
+    packet.number(std::to_underlying(state.kind));
+    packet.text(state.name);
+    packet.number(state.owners);
+    for (auto& [_, client] : clients_) {
+        if (!client.registered || client.dead) continue;
+        // The queue is bounded; a client that cannot keep up must stop rather
+        // than keep a stale view of which keys and buttons are held.
+        if (!broker::send(client.fd.get(), packet)) fail_client(client, "Input broker client could not keep up");
+    }
+}
+
 void Server::request(Client& client) {
     try {
         auto packet = broker::receive(client.fd.get());
         if (!packet) return;
         if (packet->bytes().empty()) {
-            client.dead = true;
+            disconnect_client(client);
             return;
         }
         const auto type = packet->type();
         if (type == Message::Probe && !client.registered) {
             packet->finish();
-            client.dead = true;
+            disconnect_client(client);
+        } else if (type == Message::OutputClaim) {
+            if (!client.registered) Packet::invalid();
+            const bool acquire = packet->count(1) != 0;
+            const auto kind = read_output_kind(*packet);
+            const auto name = packet->text();
+            if (name.empty()) Packet::invalid();
+            packet->finish();
+            auto& arbiter = ensure_output();
+            const int before = arbiter.owners(kind, name);
+            if (acquire) arbiter.acquire(client.fd.get(), kind, name);
+            else arbiter.release(client.fd.get(), kind, name);
+            const int after = arbiter.owners(kind, name);
+            if (before != after) broadcast_output_state({kind, name, after});
         } else {
             if (type != Message::Register || client.registered) Packet::invalid();
             register_client(client, *packet);
@@ -306,6 +435,18 @@ void Server::register_client(Client& client, Packet& packet) {
         info.number(device.mouse ? 1 : 0);
         info.codes(device.down);
         if (!broker::send(client.fd.get(), info)) throw RuntimeErrorLoomwright("Input broker registration interrupted");
+    }
+    // A joining script must see the shared held state before it can inject
+    // anything, so the snapshot precedes Ready.
+    if (output_) {
+        for (const auto& state : output_->held()) {
+            Packet info(Message::OutputState);
+            info.number(std::to_underlying(state.kind));
+            info.text(state.name);
+            info.number(state.owners);
+            if (!broker::send(client.fd.get(), info))
+                throw RuntimeErrorLoomwright("Input broker registration interrupted");
+        }
     }
     Packet ready(Message::Ready);
     ready.number(kProtocol);
@@ -466,9 +607,9 @@ bool Server::read_device(dev_t id, Device& device) {
 
 }  // namespace
 
-int run_input_broker(const BrokerKeyboard& is_keyboard) {
+int run_input_broker(const BrokerKeyboard& is_keyboard, BrokerOutputFactory output) {
     try {
-        return Server(is_keyboard).run();
+        return Server(is_keyboard, std::move(output)).run();
     } catch (const std::exception& error) {
         std::cerr << "loomwright input broker: " << error.what() << '\n';
         return 1;

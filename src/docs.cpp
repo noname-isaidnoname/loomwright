@@ -388,7 +388,10 @@ Safety and runtime behavior
   input broker suppresses.
 * `--input-mode direct` bypasses the broker for standalone runs. Do not mix it
   with consuming scripts on the same keyboard. `auto` and `broker` use shared
-  input. The broker does not coordinate synthetic output between scripts.
+  input and shared output: the broker injects each synthetic key or button once
+  no matter how many scripts hold it, and releases it after the last one frees
+  it. `mouse_held()` also sees buttons held by other scripts. Pointer motion,
+  text and dry-run output stay with each script's own backend.
 * `--get-mouse-pos` captures the desktop with spectacle, grim,
   gnome-screenshot, scrot, or ImageMagick import, then shows that still image
   full-screen in an XWayland overlay with a live coordinate tooltip. Left-click
@@ -429,6 +432,11 @@ Start `ydotoold` in your user session and make sure `/dev/uinput` is writable.
 The `uinput` backend writes input_event structures straight to /dev/uinput for
 everything; ABS_X/ABS_Y pointer mapping is compositor-dependent. Multi-monitor
 layouts and fractional scaling can change coordinate interpretation.
+Scripts sharing the broker inject keys and buttons through one broker-owned
+backend selected with `auto`; their own `output` option still drives pointer
+motion and text. If a shared script disconnects while holding a key or button,
+the broker drops only that script's claim, so the desktop never sees a
+duplicate press or a release while another script still holds it.
 
 API extension points
 --------------------

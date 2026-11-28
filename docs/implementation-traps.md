@@ -120,6 +120,27 @@ edges when the socket queue is full. It defers a normal ungrab until tracked
 keys and buttons are up and the frame is complete; as at initial capture,
 Linux does not offer an atomic idle check with the handoff ioctl.
 
+### Synthetic keys and buttons are owned by the broker
+
+In shared mode a runtime never calls `backend_->key()`/`button()` for holds:
+`hold_key`/`hold_button` send an `OutputClaim` to the broker and the broker's
+`OutputArbiter` is the only injector. The arbiter injects a down when the first
+client claims a key/button and an up when the last release (or client death)
+removes it, so two scripts cannot inject the same event twice. A client id is
+its accepted socket fd, so a departing client's claims must be dropped before
+`accept4` can hand that number to a new client; `disconnect_client()` does this
+on EOF, errors, and probe connections.
+
+The shared backend is created lazily on the first claim, so input-only scripts
+do not need a writable output device. Failed releases during a client drop or
+broker shutdown are best-effort, but the claim is still removed so state cannot
+go stale. `OutputState` deltas and the registration snapshot keep every
+client's mirror current; `mouse_held()` reads the mirror for buttons held by
+other scripts. Each script's own backend still handles pointer motion and text,
+and dry-run scripts never send claims. The protocol version is bumped whenever
+these packet shapes change: an older broker is rejected rather than silently
+losing output coordination.
+
 ### Grab only an idle device
 
 `grab_idle_input` checks that the device is idle, drains old events, checks

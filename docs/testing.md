@@ -15,7 +15,8 @@ For release packaging and Podman CI testing, see [releases.md](releases.md).
 | `tests/test_mousepos.cpp` | Picker helpers (coordinate formatting, tooltip placement, screenshot commands) and CLI argument/exit-code tests |
 | `tests/test_scheduler.cpp` | Scheduler tasks, timers, fds, cancellation, shutdown, flat-stack invariant |
 | `tests/runtime_fixtures.hpp` | Shared fixtures for the runtime tests |
-| `tests/evdev_handoff.cpp` | Real evdev/uinput handoff test (skips when isolation cannot be confirmed) |
+| `tests/evdev_handoff.cpp` | Real evdev/uinput handoff and shared-input broker tests (skip when isolation cannot be confirmed) |
+| `tests/output_broker.cpp` | Real broker with a recording output backend: overlapping key/button claims, held-state snapshots, client death |
 | `tests/picker_integration.sh` | End-to-end `--get-mouse-pos` test on a private X server |
 | `tests/gui_integration.sh` | Real GUI/panel/timer/dry-run test on a private X server |
 | `tests/uinput_fault_integration.sh` | Real `/dev/uinput` ioctl fault injection via `LD_PRELOAD` |
@@ -57,6 +58,7 @@ Weston and the optional GTK3/wayland-client build dependencies are available.
 | `evdev_handoff` | Split evdev/uinput handoff against real kernel devices | 77 |
 | `evdev_shared_broker` | Shared capture, suppression, delivery and cleanup on isolated kernel devices | 77 |
 | `shared_input_cli` | Concurrent CLI launch, stale-socket recovery, and idle exit without opening a physical keyboard | — |
+| `output_broker` | Overlapping synthetic key/button claims, single injection, held-state snapshots and client death against a real broker | — |
 | `picker_integration` | `--get-mouse-pos` on a private X server, 24-bit | 77 |
 | `picker_integration_16` | Same, 16-bit (only when Xvfb is found) | 77 |
 | `gui_integration` | GUI panels, layout switches, close/destroy/server-loss | 77 |

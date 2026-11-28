@@ -65,6 +65,94 @@ TEST_CASE(shared_input_packet_framing_and_validation) {
     CHECK_THROWS(broker::read_codes(invalid), RuntimeErrorLoomwright);
 }
 
+TEST_CASE(shared_output_packet_framing_and_validation) {
+    int fds[2];
+    CHECK_EQ(::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds), 0);
+    UniqueFd first(fds[0]), second(fds[1]);
+    broker::Packet outgoing(broker::Message::OutputClaim);
+    outgoing.number(1);
+    outgoing.number(static_cast<int32_t>(OutputKind::Button));
+    outgoing.text("LEFT");
+    CHECK_TRUE(broker::send(first.get(), outgoing));
+    auto received = broker::receive(second.get());
+    CHECK_TRUE(received.has_value());
+    CHECK_TRUE(received->type() == broker::Message::OutputClaim);
+    CHECK_EQ(received->count(1), static_cast<size_t>(1));
+    CHECK_TRUE(broker::read_output_kind(*received) == OutputKind::Button);
+    CHECK_EQ(received->text(), std::string("LEFT"));
+    received->finish();
+
+    broker::Packet invalid;
+    invalid.number(2);
+    CHECK_THROWS(broker::read_output_kind(invalid), RuntimeErrorLoomwright);
+}
+
+TEST_CASE(shared_output_injects_once_for_overlapping_key_claims) {
+    RecordingBackend backend;
+    OutputArbiter arbiter(backend);
+    CHECK_TRUE(arbiter.acquire(1, OutputKind::Key, "A"));
+    CHECK_TRUE(!arbiter.acquire(2, OutputKind::Key, "A"));
+    CHECK_TRUE(!arbiter.acquire(2, OutputKind::Key, "A"));
+    CHECK_EQ(arbiter.owners(OutputKind::Key, "A"), 2);
+    CHECK_TRUE(arbiter.is_held(OutputKind::Key, "A"));
+    CHECK_TRUE(!arbiter.is_held(OutputKind::Key, "B"));
+    CHECK_TRUE(!arbiter.release(3, OutputKind::Key, "A"));
+    CHECK_TRUE(!arbiter.release(1, OutputKind::Key, "A"));
+    CHECK_TRUE(arbiter.is_held(OutputKind::Key, "A"));
+    CHECK_TRUE(arbiter.release(2, OutputKind::Key, "A"));
+    CHECK_TRUE(!arbiter.is_held(OutputKind::Key, "A"));
+    CHECK_EQ(backend.log, (std::vector<std::string>{"key A down", "key A up"}));
+}
+
+TEST_CASE(shared_output_button_claims_release_only_last_owner) {
+    RecordingBackend backend;
+    OutputArbiter arbiter(backend);
+    CHECK_TRUE(arbiter.acquire(7, OutputKind::Button, "LEFT"));
+    CHECK_TRUE(!arbiter.acquire(8, OutputKind::Button, "LEFT"));
+    arbiter.acquire(7, OutputKind::Key, "A");
+    const auto changes = arbiter.drop(7);
+    CHECK_EQ(changes.size(), static_cast<size_t>(2));
+    CHECK_TRUE(changes[0].kind == OutputKind::Key && changes[0].name == "A" && changes[0].owners == 0);
+    CHECK_TRUE(changes[1].kind == OutputKind::Button && changes[1].name == "LEFT" && changes[1].owners == 1);
+    CHECK_TRUE(!arbiter.is_held(OutputKind::Key, "A"));
+    CHECK_TRUE(arbiter.is_held(OutputKind::Button, "LEFT"));
+    CHECK_TRUE(arbiter.release(8, OutputKind::Button, "LEFT"));
+    CHECK_EQ(backend.log, (std::vector<std::string>{"button LEFT down", "key A down", "key A up",
+                                                    "button LEFT up"}));
+}
+
+namespace {
+
+struct FailReleaseBackend : RecordingBackend {
+    void key(const std::string& name, bool down) override {
+        if (!down) throw BackendError("key release failed");
+        RecordingBackend::key(name, down);
+    }
+    void button(const std::string& name, bool down) override {
+        if (!down) throw BackendError("button release failed");
+        RecordingBackend::button(name, down);
+    }
+};
+
+}  // namespace
+
+TEST_CASE(shared_output_snapshot_survives_failed_release) {
+    FailReleaseBackend backend;
+    OutputArbiter arbiter(backend);
+    arbiter.acquire(1, OutputKind::Key, "A");
+    arbiter.acquire(2, OutputKind::Key, "A");
+    arbiter.acquire(1, OutputKind::Button, "RIGHT");
+    const auto held = arbiter.held();
+    CHECK_EQ(held.size(), static_cast<size_t>(2));
+    CHECK_TRUE(held[0].kind == OutputKind::Key && held[0].name == "A" && held[0].owners == 2);
+    CHECK_TRUE(held[1].kind == OutputKind::Button && held[1].name == "RIGHT" && held[1].owners == 1);
+    CHECK_TRUE(!arbiter.drop(1).empty());  // one owner left, no injection attempted
+    CHECK_TRUE(arbiter.is_held(OutputKind::Key, "A"));
+    arbiter.clear();  // failed injections must not throw or leave stale state
+    CHECK_TRUE(arbiter.held().empty());
+    CHECK_EQ(backend.log, (std::vector<std::string>{"key A down", "button RIGHT down"}));
+}
+
 
 namespace {
 

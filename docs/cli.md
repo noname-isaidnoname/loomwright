@@ -54,8 +54,10 @@ loop. After the loop it rethrows `runtime.failure()` if one was recorded.
 `--dry-run` logs output actions instead of injecting them and observes physical
 keys without requesting suppression. `--input-device`, `--output-backend`,
 `--screen-size` and `--verbose` override the script/CLI options. `--input-mode
-auto` (the default) and `--input-mode broker` both use shared input; they do not
-silently fall back to a direct reader on broker errors. `--input-mode direct`
+auto` (the default) and `--input-mode broker` both use shared input and shared
+synthetic key/button injection; they do not silently fall back to a direct
+reader on broker errors. Overlapping key/button holds are injected once by the
+broker and released after the last owner frees them. `--input-mode direct`
 opts out for standalone use. A direct reader does not receive input from a
 device grabbed by another process, including the broker.
 

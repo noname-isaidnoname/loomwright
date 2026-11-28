@@ -10,6 +10,7 @@
 #include <system_error>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 
 #include "subprocess.hpp"
 
@@ -88,6 +89,12 @@ std::vector<int> read_codes(Packet& packet) {
         codes.push_back(value);
     }
     return codes;
+}
+
+OutputKind read_output_kind(Packet& packet) {
+    const auto value = packet.number();
+    if (value != 0 && value != 1) Packet::invalid();
+    return static_cast<OutputKind>(value);
 }
 
 }  // namespace loomwright::broker
@@ -170,6 +177,9 @@ InputClient::InputClient(const BrokerRequest& request) {
                     devices_.push_back(std::move(info));
                     break;
                 }
+                case Message::OutputState:
+                    apply_output_state(packet);
+                    break;
                 case Message::Ready:
                     if (packet.number() != kProtocol)
                         throw RuntimeErrorLoomwright("Incompatible input broker; stop older Loomwright instances and retry");
@@ -183,27 +193,59 @@ InputClient::InputClient(const BrokerRequest& request) {
     throw RuntimeErrorLoomwright("Cannot connect to the input broker");
 }
 
+void InputClient::apply_output_state(broker::Packet& packet) {
+    const auto kind = broker::read_output_kind(packet);
+    const auto name = packet.text();
+    if (name.empty()) Packet::invalid();
+    const int owners = static_cast<int>(packet.count(128));
+    packet.finish();
+    shared_output_[{kind, name}] = owners;
+}
+
+void InputClient::claim_output(OutputKind kind, const std::string& name, bool down) {
+    Packet packet(Message::OutputClaim);
+    packet.number(down ? 1 : 0);
+    packet.number(std::to_underlying(kind));
+    packet.text(name);
+    if (!broker::send(fd(), packet)) throw RuntimeErrorLoomwright("Input broker output claim interrupted");
+}
+
+bool InputClient::output_held(OutputKind kind, const std::string& name) const {
+    return output_owners(kind, name) > 0;
+}
+
+int InputClient::output_owners(OutputKind kind, const std::string& name) const {
+    const auto found = shared_output_.find({kind, name});
+    return found == shared_output_.end() ? 0 : found->second;
+}
+
 std::optional<BrokerEvent> InputClient::receive() {
-    auto packet = broker::receive(fd());
-    if (!packet) return std::nullopt;
-    if (packet->bytes().empty()) throw RuntimeErrorLoomwright("Input broker disconnected");
-    const auto type = packet->type();
-    if (type == Message::Error) read_error(*packet);
-    if (type != Message::Edges && type != Message::Removed) Packet::invalid();
-    BrokerEvent event;
-    event.path = packet->text();
-    event.disconnected = type == Message::Removed;
-    if (!event.disconnected) {
-        const auto count = packet->count(KEY_CNT * 2);
-        event.edges.reserve(count);
-        for (size_t i = 0; i < count; ++i) {
-            const auto code = packet->count(KEY_MAX);
-            const auto value = packet->count(1);
-            event.edges.push_back({EV_KEY, static_cast<int>(code), static_cast<int>(value)});
+    while (true) {
+        auto packet = broker::receive(fd());
+        if (!packet) return std::nullopt;
+        if (packet->bytes().empty()) throw RuntimeErrorLoomwright("Input broker disconnected");
+        const auto type = packet->type();
+        if (type == Message::OutputState) {
+            apply_output_state(*packet);
+            continue;
         }
+        if (type == Message::Error) read_error(*packet);
+        if (type != Message::Edges && type != Message::Removed) Packet::invalid();
+        BrokerEvent event;
+        event.path = packet->text();
+        event.disconnected = type == Message::Removed;
+        if (!event.disconnected) {
+            const auto count = packet->count(KEY_CNT * 2);
+            event.edges.reserve(count);
+            for (size_t i = 0; i < count; ++i) {
+                const auto code = packet->count(KEY_MAX);
+                const auto value = packet->count(1);
+                event.edges.push_back({EV_KEY, static_cast<int>(code), static_cast<int>(value)});
+            }
+        }
+        packet->finish();
+        return event;
     }
-    packet->finish();
-    return event;
 }
 
 bool input_broker_running() {

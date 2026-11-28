@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(loomwright
-    VERSION 0.8.0
+    VERSION 0.9.0
     DESCRIPTION "A Linux-first desktop automation language and runtime"
     LANGUAGES C CXX)
 
@@ -291,6 +291,11 @@ if(BUILD_TESTING)
     add_test(NAME shared_input_cli
         COMMAND bash ${CMAKE_SOURCE_DIR}/tests/shared_input_cli.sh $<TARGET_FILE:loomwright>)
     set_tests_properties(shared_input_cli PROPERTIES TIMEOUT 20)
+
+    add_executable(output_broker tests/output_broker.cpp)
+    target_link_libraries(output_broker PRIVATE loomwright_core loomwright_test_options)
+    add_test(NAME output_broker COMMAND output_broker)
+    set_tests_properties(output_broker PROPERTIES TIMEOUT 20)
 
     # The picker needs a real X server; the shell test starts a private one and
     # skips (77) when none is available.

@@ -103,6 +103,8 @@ private:
     bool hotkey_enabled(const Node& event) const;
 
     std::unique_ptr<OutputBackend> select_backend();
+    void inject_key(const std::string& name, bool down);
+    void inject_button(const std::string& button, bool down);
     void say(const std::string& message);
     std::vector<std::unique_ptr<InputDevice>> open_input_devices(bool include_mice);
     std::string input_permission_help() const;
@@ -185,6 +187,7 @@ private:
     std::map<std::string, std::set<int>> device_raw_down_;
     std::set<std::string> desynchronized_devices_;
     std::set<std::string> consumed_keys_;
+    std::shared_ptr<InputClient> input_client_;
     std::vector<std::unique_ptr<InputDevice>> devices_;
     std::map<std::string, std::string> held_tokens_;
     std::map<std::string, int> button_refs_;

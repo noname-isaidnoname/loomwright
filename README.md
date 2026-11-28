@@ -341,7 +341,7 @@ Run scripts in separate terminals or processes as usual. By default, Loomwright 
 
 The broker is shared by invocations of the same user with the same `$XDG_RUNTIME_DIR` (or by that user when it is unset). It exits automatically when no scripts need it and any captured keys have been released. Release held keys before starting the first consuming script. Use `--input-mode direct` only for standalone runs; a direct-mode script or another remapper cannot share an exclusive grab on the same keyboard. `--doctor` reports whether the broker is running.
 
-Input sharing does not coordinate output actions. If two scripts synthesize the same held key or button, prefer `--output-backend uinput` for separate virtual devices; `ydotoold` uses a shared virtual device.
+Scripts sharing the broker also share synthetic key and button injection: when two scripts hold the same key or button it is injected once and released only after the last one frees it. A script that stops or disconnects drops only its own claims, and `mouse_held()` sees buttons held by any script. Shared keys and buttons are injected through one broker-owned backend selected with `auto`; pointer motion and `send TEXT` still use each script's own `output` backend. `--input-mode direct` and `--dry-run` do not claim shared output.
 
 ## Contributing
 
