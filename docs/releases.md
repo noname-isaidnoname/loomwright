@@ -63,9 +63,12 @@ release artifacts are not a substitute for independent security review.
 
 ### Dispatching a release
 
-1. Set the new version in `CMakeLists.txt` and `packaging/arch/PKGBUILD`, run
-   the tests and package checks, commit, and push the trusted ref. Existing
-   version tags and releases are never overwritten by manual dispatch.
+1. Confirm the version in `CMakeLists.txt` and `packaging/arch/PKGBUILD`
+   covers the pending commits, run the tests and package checks, commit, and
+   push the trusted ref. An earlier unpushed commit may already have bumped it;
+   do not add another bump for a change of the same or smaller scope (see
+   [contributing.md#versioning](contributing.md#versioning)). Existing version
+   tags and releases are never overwritten by manual dispatch.
 2. In GitHub Actions, choose **Build and publish releases**, select the ref,
    enter the optional release description in Markdown, and run the workflow.
    The description becomes the release body, followed by download guidance.

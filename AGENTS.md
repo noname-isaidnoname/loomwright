@@ -29,7 +29,7 @@ Internal docs live in `docs/`; start at [`docs/README.md`](docs/README.md) and r
 - C++23, 4-space indentation, RAII, explicit exception types, and a warning-clean build. See [`docs/contributing.md`](docs/contributing.md).
 - Keep the DSL small: no arbitrary code execution, shell strings, or file/network APIs without a deliberate design change.
 - Update `README.md` and `src/docs.cpp` (`kGuide` and `api_reference()`) with user-visible changes, and keep the relevant `docs/*.md` in sync. See [`docs/contributing.md`](docs/contributing.md).
-- Versioning: bump `project(loomwright VERSION ...)` in `CMakeLists.txt` (the source of truth) and keep `packaging/arch/PKGBUILD` in sync. See [`docs/contributing.md#versioning`](docs/contributing.md#versioning).
+- Versioning: bump `project(loomwright VERSION ...)` in `CMakeLists.txt` (the source of truth) and keep `packaging/arch/PKGBUILD` in sync — but only if the change's scope is higher than any bump already pending in unpushed commits; a lower-scope change after an unpushed bump carries no bump. See [`docs/contributing.md#versioning`](docs/contributing.md#versioning).
 - Commit once verified: run `make` (build plus the full test suite) and, when the language changes, `loomwright --check` on every script in `examples/`. See [`docs/contributing.md#committing`](docs/contributing.md#committing). **Read first if the task also involves committing changes at the end.**
 - Do not assume the session type, compositor, distro or package manager anywhere — detect at runtime and keep docs generic. See [`docs/build-and-install.md#environment-assumptions`](docs/build-and-install.md#environment-assumptions).
 - Use `rg` (if available) instead of `grep` for faster searching.
@@ -57,7 +57,10 @@ report why — do not invent a release. Follow
    in `packaging/arch/PKGBUILD` with `gh release list` and
    `gh release view <tag>`. They must agree on a version newer than the latest
    published release. If the version has not moved, stop and ask for a bump (or
-   make one per the versioning policy when the change warrants it).
+   make one per the versioning policy when the change warrants it). A bump
+   already pending in an unpushed commit satisfies this on its own: a later
+   change of the same or smaller scope adds no bump, while a higher-scope
+   change raises it to the next tier before release.
 3. Check the style of the previous release body with
    `gh release view <tag> --json body --jq .body`, then write notes to
    `/tmp/opencode/loomwright-<version>-release-notes.md`. Use the established

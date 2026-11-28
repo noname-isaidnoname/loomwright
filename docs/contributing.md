@@ -31,7 +31,7 @@ When user-visible behaviour changes, update the docs in the same commit:
 | Language statement/builtin/option | `src/docs.cpp` (`kGuide` and `api_reference()`), `README.md` if user-visible |
 | User-facing behaviour | `README.md` and `src/docs.cpp` |
 | Architecture, build, testing, traps | the relevant `docs/*.md` |
-| Version | `CMakeLists.txt` and `packaging/arch/PKGBUILD` |
+| Version (when a bump is warranted) | `CMakeLists.txt` and `packaging/arch/PKGBUILD` |
 
 The repository must never be in a state where the docs disagree with the build.
 
@@ -52,8 +52,23 @@ The repository must never be in a state where the docs disagree with the build.
   - **Major** (`X+1.0.0`): breaking changes to script syntax/semantics, CLI
     behaviour, runtime behaviour that existing scripts rely on, or other
     incompatible changes.
+- Do not stack a bump on top of an unpushed bump of the same or smaller scope.
+  Before bumping, check `git log origin/main..HEAD` and compare the version in
+  the tree with the latest release tag: the current version already reflects
+  the highest-scope bump among the commits not yet covered by a release. If an
+  earlier unpushed commit bumped the version, keep it unless this change's
+  scope is strictly higher (patch < minor < major); raise the version to the
+  next tier only for that higher scope:
+  - Patch change after an unpushed patch bump: no bump.
+  - Minor or major change after an unpushed patch bump: bump to the next minor
+    or major version.
+  - Patch or minor change after an unpushed minor bump: no bump.
+  - Major change after an unpushed minor bump: bump to the next major version.
+  - Any change after an unpushed major bump: no bump until that batch is
+    released.
 - When in doubt, prefer the smaller bump that accurately reflects compatibility
-  impact, and mention the version bump in the change summary.
+  impact, apply the unpushed-commit rule above, and mention a version bump in
+  the change summary only when you actually make one.
 
 ## Committing
 
@@ -64,10 +79,12 @@ The repository must never be in a state where the docs disagree with the build.
   when the change touches the language, `loomwright --check` on every script in
   `examples/`. Commit only what passes.
 - Keep the commit focused: one logical change per commit, with a message that
-  says what changed and why. Reference the version bump in the message when the
-  change ships user-visible behaviour.
-- Update `README.md`, `src/docs.cpp` (`kGuide` and `api_reference()`), and the
-  version files in the same commit as the code they describe.
+  says what changed and why. Reference the version bump in the message when
+  this commit actually bumps the version; a lower-scope commit in the same
+  unreleased batch carries no bump.
+- Update `README.md`, `src/docs.cpp` (`kGuide` and `api_reference()`), and, when
+  a bump is warranted, the version files in the same commit as the code they
+  describe.
 
 ## Before you start
 
